@@ -44,6 +44,17 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .foot { font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
 .foot a { color: var(--accent); }
 #toggle { display: none; }
+.btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn { font: inherit; padding: 5px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--fg); cursor: pointer; }
+.btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.units { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.units label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+#measureOut { font-family: var(--font-data); font-size: 12px; }
+/* while measuring, clicks go to the map, not to feature popups (!important beats Leaflet's own path.leaflet-interactive rule) */
+.measuring .leaflet-overlay-pane, .measuring .leaflet-interactive { pointer-events: none !important; }
+.measuring { cursor: crosshair; }
+.m-label { font: 600 12px/1.2 var(--font-data); background: var(--panel); color: var(--fg); border: 1px solid var(--accent); }
 
 .leaflet-popup-content { font: 13px/1.4 var(--font-body); margin: 10px 12px; }
 .pop h3 { font: 600 15px/1.2 var(--font-display); margin: 0 0 6px; }
@@ -67,6 +78,21 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
     <h1>Ontario Grid Capacity</h1>
     <button id="toggle" type="button" aria-expanded="true">Hide</button>
   </div>
+
+  <section>
+    <h2>Measure</h2>
+    <div class="btns">
+      <button class="btn" type="button" id="measureLine" aria-pressed="false">Distance</button>
+      <button class="btn" type="button" id="measureArea" aria-pressed="false">Area</button>
+      <button class="btn" type="button" id="measureFinish" hidden>Finish</button>
+      <button class="btn" type="button" id="measureClear">Clear</button>
+    </div>
+    <div class="units">
+      <label for="lenUnit">Length<select id="lenUnit"></select></label>
+      <label for="areaUnit">Area<select id="areaUnit"></select></label>
+    </div>
+    <div id="measureOut" role="status"></div>
+  </section>
 
   <section>
     <h2>Capacity layer (OEB CCIM)</h2>
@@ -332,6 +358,92 @@ if (DATA) {
 }
 
 map.on('zoomend', syncCcim);
+
+// --- Measuring tool: click to add points, double-click or Finish to end, Esc to cancel
+const LEN = { m: ['m', 1], km: ['km', 1000], ft: ['ft', 0.3048], mi: ['mi', 1609.344] };
+const AREA = { m2: ['m²', 1], ha: ['ha', 1e4], km2: ['km²', 1e6], ft2: ['ft²', 0.09290304], ac: ['acres', 4046.8564224], mi2: ['mi²', 2589988.110336] };
+Object.entries(LEN).forEach(([k, [l]]) => $('lenUnit').add(new Option(l, k)));
+Object.entries(AREA).forEach(([k, [l]]) => $('areaUnit').add(new Option(l, k)));
+$('lenUnit').value = 'km'; $('areaUnit').value = 'ha';
+
+const fmt = (v, [label, size]) => `${(v / size).toLocaleString('en-CA', { maximumFractionDigits: v / size < 10 ? 2 : v / size < 1000 ? 1 : 0 })} ${label}`;
+const pathLength = pts => pts.slice(1).reduce((sum, p, i) => sum + map.distance(pts[i], p), 0);
+// Spherical polygon area (same formula as Leaflet.draw's geodesicArea), in m²
+function geodesicArea(pts) {
+  const R = 6378137, rad = Math.PI / 180;
+  let a = 0;
+  pts.forEach((p, i) => { const q = pts[(i + 1) % pts.length]; a += (q.lng - p.lng) * rad * (2 + Math.sin(p.lat * rad) + Math.sin(q.lat * rad)); });
+  return Math.abs(a * R * R / 2);
+}
+{ // self-check: 0.01° square at the equator ≈ 1.2364 km², and 1 km ≈ 0.621 mi
+  const sq = [L.latLng(0, 0), L.latLng(0, 0.01), L.latLng(0.01, 0.01), L.latLng(0.01, 0)];
+  console.assert(Math.abs(geodesicArea(sq) / 1.2364e6 - 1) < 0.01, 'geodesicArea');
+  console.assert(fmt(1000, LEN.mi) === '0.62 mi' && fmt(25000, AREA.ha) === '2.5 ha', 'fmt');
+}
+
+map.createPane('measure').style.zIndex = 640;   // above every data layer, below popups
+const measureSvg = L.svg({ pane: 'measure' });   // non-interactive SVG paths never catch clicks
+const measures = [];   // finished: { kind, pts, layer }
+let draft = null;      // in progress: { kind, pts, layer, guide }
+const lenU = () => LEN[$('lenUnit').value], areaU = () => AREA[$('areaUnit').value];
+const describe = (kind, pts) => kind === 'area'
+  ? `${fmt(geodesicArea(pts), areaU())} · perimeter ${fmt(pathLength([...pts, pts[0]]), lenU())}`
+  : fmt(pathLength(pts), lenU());
+
+function label(m) {
+  if (m.layer.getTooltip()) return m.layer.setTooltipContent(describe(m.kind, m.pts));
+  const at = m.kind === 'area' ? m.layer.getCenter() : m.pts[m.pts.length - 1];
+  m.layer.bindTooltip(describe(m.kind, m.pts), { permanent: true, direction: 'top', className: 'm-label' }).openTooltip(at);
+}
+function refreshOut() {
+  const live = draft && draft.pts.length > 1 ? `${draft.kind === 'area' ? 'Drawing area' : 'Drawing line'}: ${describe(draft.kind, draft.pts)}` : '';
+  $('measureOut').textContent = live || (draft ? 'Click the map to add points.' : measures.length ? measures.map(m => describe(m.kind, m.pts)).join('\n') : '');
+  $('measureOut').style.whiteSpace = 'pre-line';
+}
+
+function startMeasure(kind) {
+  if (draft) finishMeasure();
+  const style = { color: '#0b6e99', weight: 3, dashArray: kind === 'area' ? null : '6 4', fillOpacity: 0.15, pane: 'measure', renderer: measureSvg, interactive: false };
+  draft = { kind, pts: [], layer: (kind === 'area' ? L.polygon([], style) : L.polyline([], style)).addTo(map),
+            guide: L.polyline([], { color: '#0b6e99', weight: 1.5, dashArray: '3 4', pane: 'measure', renderer: measureSvg, interactive: false }).addTo(map) };
+  map.doubleClickZoom.disable();
+  map.getContainer().classList.add('measuring');
+  $('measureLine').setAttribute('aria-pressed', String(kind === 'line'));
+  $('measureArea').setAttribute('aria-pressed', String(kind === 'area'));
+  $('measureFinish').hidden = false;
+  refreshOut();
+}
+function stopDrawing() {
+  draft.guide.remove();
+  draft = null;
+  map.doubleClickZoom.enable();
+  map.getContainer().classList.remove('measuring');
+  $('measureLine').setAttribute('aria-pressed', 'false');
+  $('measureArea').setAttribute('aria-pressed', 'false');
+  $('measureFinish').hidden = true;
+}
+function finishMeasure() {
+  if (!draft) return;
+  const m = draft, enough = m.pts.length >= (m.kind === 'area' ? 3 : 2);
+  stopDrawing();
+  if (enough) { measures.push(m); label(m); } else m.layer.remove();
+  refreshOut();
+}
+function cancelMeasure() { if (draft) { draft.layer.remove(); stopDrawing(); refreshOut(); } }
+
+map.on('click', e => { if (!draft) return; draft.pts.push(e.latlng); draft.layer.setLatLngs(draft.pts); refreshOut(); });
+map.on('dblclick', e => { if (draft) { draft.pts.pop(); finishMeasure(); } });   // the dblclick's second click already added a duplicate point
+map.on('mousemove', e => {
+  if (!draft || !draft.pts.length) return;
+  const last = draft.pts[draft.pts.length - 1];
+  draft.guide.setLatLngs(draft.kind === 'area' && draft.pts.length > 1 ? [last, e.latlng, draft.pts[0]] : [last, e.latlng]);
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') cancelMeasure(); });
+$('measureLine').onclick = () => draft?.kind === 'line' ? finishMeasure() : startMeasure('line');
+$('measureArea').onclick = () => draft?.kind === 'area' ? finishMeasure() : startMeasure('area');
+$('measureFinish').onclick = finishMeasure;
+$('measureClear').onclick = () => { cancelMeasure(); measures.splice(0).forEach(m => m.layer.remove()); refreshOut(); };
+$('lenUnit').onchange = $('areaUnit').onchange = () => { measures.forEach(label); refreshOut(); };
 
 $('toggle').onclick = () => {
   const closed = $('panel').classList.toggle('closed');
