@@ -142,11 +142,11 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   </details>
 
   <details class="sec">
-    <summary>Gas infrastructure (OpenStreetMap)</summary>
+    <summary>Gas infrastructure</summary>
     <div class="sec-body">
     <label class="opt"><input type="checkbox" id="showGas" checked> Show gas infrastructure</label>
     <div class="legend" id="gasLegend"></div>
-    <p class="note">OpenStreetMap has no gas pressure or flow data for Ontario, so pipelines are split by type. Transmission lines carry the most gas.</p>
+    <p class="note">Alberta lines are from the Alberta Energy Regulator (operating gas pipelines, personal use) and include diameter and maximum pressure. Elsewhere, OpenStreetMap has no pressure or flow data, so its pipelines are split by type.</p>
     </div>
   </details>
 
@@ -361,8 +361,12 @@ function powerStyle(t) {
 // OSM gas data has no pressure/flow (0 of ~580 Ontario pipelines tag pressure), so pipeline usage is the best size proxy
 const GAS_CATS = [
   { key: 'tcmainline', label: 'TC Canadian Mainline (CER)', swatch: lineSw('#e65100') },
-  { key: 'transmission', label: 'Transmission pipelines', swatch: lineSw('#8a4b08') },
-  { key: 'pipeline', label: 'Other gas pipelines', swatch: lineSw('#d99a1e') },
+  { key: 'aer16', label: 'Alberta gas lines 16"+ (AER)', swatch: lineSw('#7f2704') },
+  { key: 'aer8', label: 'Alberta gas lines 8–16" (AER)', swatch: lineSw('#d94801') },
+  { key: 'aer4', label: 'Alberta gas lines 4–8" (AER)', swatch: lineSw('#fd8d3c') },
+  { key: 'aersmall', label: 'Alberta gas lines under 4" (AER)', swatch: lineSw('#fdbe85'), off: true },   // separate 5 MB file, loaded on tick
+  { key: 'transmission', label: 'Transmission pipelines (OSM)', swatch: lineSw('#8a4b08') },
+  { key: 'pipeline', label: 'Other gas pipelines (OSM)', swatch: lineSw('#d99a1e') },
   { key: 'station', label: 'Compressor / regulator stations', swatch: dotSw('#8a4b08') },
   { key: 'well', label: 'Gas & petroleum wells', swatch: dotSw('#6b7785'), off: true },   // ~30k points in AB/SK: off by default
   { key: 'storage', label: 'Gas storage tanks', swatch: boxSw('#d99a1e') },
@@ -430,8 +434,40 @@ const tcMainline = L.esri.featureLayer({
   attribution: 'TC Canadian Mainline: Canada Energy Regulator (personal, non-commercial use)',
   style: () => ({ color: '#e65100', weight: 4.5, opacity: 0.9 }),
 }).bindPopup(l => attrPopup('TC Canadian Mainline', l));
-const addGas = infraGroup({ cats: GAS_CATS, catOf: gasCat, style: gasStyle, master: 'showGas', legend: 'gasLegend', extra: { tcmainline: tcMainline } });
-$('gasLegend').querySelector('[data-count="tcmainline"]').textContent = 'live';
+// Alberta's operating gas pipelines from the AER (fetch_aer_gas.py). ~60k lines: drawn on the map's shared canvas
+// (SVG would crawl), which also keeps capacity-area clicks working underneath.
+const AER_CLASSES = [['aer16', 406.4, '#7f2704', 3.5], ['aer8', 219.1, '#d94801', 2.5], ['aer4', 114.3, '#fd8d3c', 1.6], ['aersmall', 0, '#fdbe85', 1]];
+const aerClass = d => AER_CLASSES.find(([, min]) => (d ?? 0) >= min);
+console.assert(aerClass(406.4)[0] === 'aer16' && aerClass(219.1)[0] === 'aer8' && aerClass(60.3)[0] === 'aersmall' && aerClass(null)[0] === 'aersmall', 'aerClass');
+const aerGroups = Object.fromEntries(AER_CLASSES.map(([k]) => [k, L.layerGroup()]));
+const GAS_TYPE = { sweet: 'Natural gas', sour: 'Sour natural gas', fuel: 'Fuel gas' };
+const aerPopup = (op, diam, maop, gas, lic) => `<div class="pop"><h3>${esc(op)}</h3><dl>
+  ${row('Type', GAS_TYPE[gas])}${row('Diameter', diam && `${diam} mm (${(diam / 25.4).toFixed(1)}")`)}
+  ${row('Max operating pressure', maop && `${maop.toLocaleString()} kPa`)}${row('AER licence-line', lic)}${row('Source', 'Alberta Energy Regulator')}</dl></div>`;
+
+const addGas = infraGroup({ cats: GAS_CATS, catOf: gasCat, style: gasStyle, master: 'showGas', legend: 'gasLegend', extra: { tcmainline: tcMainline, ...aerGroups } });
+const gasCount = (k, text) => $('gasLegend').querySelector(`[data-count="${k}"]`).textContent = text;
+gasCount('tcmainline', 'live');
+['aer16', 'aer8', 'aer4'].forEach(k => gasCount(k, 'loads in AB'));
+gasCount('aersmall', 'tick to load');
+
+const loadScript = (src, onerror) => { const tag = document.createElement('script'); tag.src = src; tag.onerror = onerror; document.head.append(tag); };
+const aerRequested = new Set();
+function loadAer(set) {
+  if (aerRequested.has(set)) return;
+  aerRequested.add(set);
+  loadScript(`data/aer-gas-${set}.js`, () => { aerRequested.delete(set); osmStatus(`Could not load Alberta gas data: run "python fetch_aer_gas.py".`, true); });
+}
+$('gasLegend').addEventListener('change', () => { if ($('gasLegend').querySelector('[data-key="aersmall"]').checked) loadAer('small'); });
+window.AER_LOADED = d => {
+  const counts = {};
+  for (const [pts, op, diam, maop, gas, lic] of d.f) {
+    const [k, , color, weight] = aerClass(diam);
+    L.polyline(pts, { color, weight, opacity: 0.85 }).bindPopup(() => aerPopup(d.ops[op], diam, maop, gas, lic)).addTo(aerGroups[k]);
+    counts[k] = (counts[k] || 0) + 1;
+  }
+  for (const [k, n] of Object.entries(counts)) gasCount(k, n.toLocaleString());
+};
 
 // --- Fibre & telecom: OpenStreetMap (data/telecom.js), ISED community backbone flags (data/nbd-backbone.js),
 // and live official fibre routes from the N.W.T. government's ArcGIS service. Loaded the first time it's switched on.
@@ -501,6 +537,7 @@ const INDEX = window.INFRA_INDEX || {};
 const provinces = Object.fromEntries(Object.entries(INDEX).map(([code, p]) =>
   [code, { ...p, bounds: L.latLngBounds([p.bbox[1], p.bbox[0]], [p.bbox[3], p.bbox[2]]), state: 'idle' }]));
 window.INFRA_LOADED = (code, fc) => {
+  if (code === 'CA-AB') loadAer('main');
   const isGas = f => !!f.properties.gas;   // tagged by fetch_infrastructure.py
   addPower(fc.features.filter(f => !isGas(f)));
   addGas(fc.features.filter(isGas));
