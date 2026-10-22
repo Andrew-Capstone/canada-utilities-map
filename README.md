@@ -28,5 +28,6 @@ python fetch_telecom.py
 - Infrastructure and telecom: © OpenStreetMap contributors, ODbL.
 - Community backbone flags: ISED National Broadband Data, Open Government Licence – Canada.
 - Northwestel / N.W.T. fibre routes: Government of the Northwest Territories ArcGIS service.
+- TC Canadian Mainline route: Canada Energy Regulator pipeline map service, personal and non-commercial use only.
 - Basemaps: Esri Light/Dark Gray Canvas, World Imagery (satellite), World Hillshade and World Topographic.
 - Contour lines: generated in the browser from AWS Terrain Tiles (NRCan CDEM, SRTM), accurate to a few metres.

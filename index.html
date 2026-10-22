@@ -358,6 +358,7 @@ function powerStyle(t) {
 
 // OSM gas data has no pressure/flow (0 of ~580 Ontario pipelines tag pressure), so pipeline usage is the best size proxy
 const GAS_CATS = [
+  { key: 'tcmainline', label: 'TC Canadian Mainline (CER)', swatch: lineSw('#e65100') },
   { key: 'transmission', label: 'Transmission pipelines', swatch: lineSw('#8a4b08') },
   { key: 'pipeline', label: 'Other gas pipelines', swatch: lineSw('#d99a1e') },
   { key: 'station', label: 'Compressor / regulator stations', swatch: dotSw('#8a4b08') },
@@ -420,7 +421,15 @@ function infraGroup({ cats, catOf, style, master, legend, extra = {}, onFirstSho
   };
 }
 const addPower = infraGroup({ cats: POWER_CATS, catOf: powerCat, style: powerStyle, master: 'showOsm', legend: 'osmLegend' });
-const addGas = infraGroup({ cats: GAS_CATS, catOf: gasCat, style: gasStyle, master: 'showGas', legend: 'gasLegend' });
+// TC Canadian Mainline route, live from the Canada Energy Regulator's pipeline map service (personal, non-commercial use only)
+const tcMainline = L.esri.featureLayer({
+  url: 'https://services5.arcgis.com/vNzamREXvX2WcX6d/ArcGIS/rest/services/CER_Pipeline_Systems_WGS84_view/FeatureServer/3',
+  where: "PipelineID = 'TCPL'", pane: 'osm', renderer: osmSvg, simplifyFactor: 0.35,
+  attribution: 'TC Canadian Mainline: Canada Energy Regulator (personal, non-commercial use)',
+  style: () => ({ color: '#e65100', weight: 4.5, opacity: 0.9 }),
+}).bindPopup(l => attrPopup('TC Canadian Mainline', l));
+const addGas = infraGroup({ cats: GAS_CATS, catOf: gasCat, style: gasStyle, master: 'showGas', legend: 'gasLegend', extra: { tcmainline: tcMainline } });
+$('gasLegend').querySelector('[data-count="tcmainline"]').textContent = 'live';
 
 // --- Fibre & telecom: OpenStreetMap (data/telecom.js), ISED community backbone flags (data/nbd-backbone.js),
 // and live official fibre routes from the N.W.T. government's ArcGIS service. Loaded the first time it's switched on.
@@ -428,7 +437,7 @@ const FIBRE = '#0f8b8d', FIBRE_OFFICIAL = '#1b5e20', RAIL = '#8d6e63';
 const GNWT = 'https://www.apps.geomatics.gov.nt.ca/arcgis/rest/services/GNWT/UtilitiesCommunication_LCC/MapServer/';
 // popup listing a live layer's own fields, minus ids and CAD export fields
 const attrPopup = (title, l) => `<div class="pop"><h3>${title}</h3><dl>${Object.entries(l.feature.properties)
-  .filter(([k, v]) => !/^(OBJECTID|Shape.*|FID.*|sd_.*|Color|Linetype|Elevation|LineWt)$/i.test(k) && v != null && String(v).trim() !== '').map(([k, v]) => row(k, v)).join('')}</dl></div>`;
+  .filter(([k, v]) => !/^(OBJECTID|Shape.*|FID.*|sd_.*|Color|Linetype|Elevation|LineWt|.*_FRA|UploadedAt|PipelineID)$/i.test(k) && v != null && String(v).trim() !== '').map(([k, v]) => row(k, v)).join('')}</dl></div>`;
 // explicit attribution: otherwise esri-leaflet shows the service's copyright text, which lists staff names and phone numbers
 const gnwtFibre = (id, title) => L.esri.featureLayer({ url: GNWT + id, pane: 'osm', renderer: osmSvg, attribution: 'Fibre routes: Government of the Northwest Territories',
   style: () => ({ color: FIBRE_OFFICIAL, weight: 3.5 }) }).bindPopup(l => attrPopup(title, l));
