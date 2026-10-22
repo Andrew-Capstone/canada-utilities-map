@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ontario Grid Capacity Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@600&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+/* Layout: full-bleed map, one floating control panel top-left that collapses to a bottom sheet on phones */
+:root {
+  --bg: #f3f5f7; --panel: #ffffff; --fg: #1d2731; --muted: #5d6b78; --line: #d6dde4; --accent: #0b6e99;
+  --font-display: "Barlow Semi Condensed", "Arial Narrow", Arial, sans-serif;
+  --font-body: "Barlow", "Segoe UI", Arial, sans-serif;
+  --font-data: "JetBrains Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #11171c; --panel: #1a232b; --fg: #e3e9ee; --muted: #93a2af; --line: #2d3a45; --accent: #4fb3dc; color-scheme: dark; }
+}
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font-body); }
+#map { position: absolute; inset: 0; background: var(--bg); }
+
+.panel {
+  position: absolute; z-index: 1000; top: 12px; left: 12px; width: 300px; max-height: calc(100% - 24px);
+  overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: 0 2px 12px rgb(0 0 0 / .15); display: flex; flex-direction: column; gap: 14px; padding: 14px 16px;
+}
+.panel h1 { font: 600 20px/1.1 var(--font-display); margin: 0; text-wrap: balance; }
+.panel h2 { font: 600 11px/1 var(--font-body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+.panel p { margin: 0; color: var(--muted); font-size: 13px; }
+section { display: flex; flex-direction: column; gap: 4px; }
+label.opt { display: flex; gap: 8px; align-items: center; cursor: pointer; padding: 2px 0; }
+select { width: 100%; font: inherit; padding: 5px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--fg); }
+select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.legend { display: flex; flex-direction: column; gap: 1px; font-family: var(--font-data); font-size: 12px; }
+.legend label { display: flex; gap: 8px; align-items: center; cursor: pointer; padding: 1px 0; }
+.legend label:has(input:not(:checked)) { opacity: .45; }
+.note { font-family: var(--font-body); color: var(--muted); font-size: 12px; }
+.sw { width: 18px; height: 12px; border-radius: 2px; border: 1px solid rgb(0 0 0 / .2); }
+.sw.ln { height: 4px; border: 0; }
+.status { font-size: 12px; color: var(--muted); min-height: 1.4em; }
+.status.err { color: #c0392b; }
+.foot { font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
+.foot a { color: var(--accent); }
+#toggle { display: none; }
+
+.leaflet-popup-content { font: 13px/1.4 var(--font-body); margin: 10px 12px; }
+.pop h3 { font: 600 15px/1.2 var(--font-display); margin: 0 0 6px; }
+.pop dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; }
+.pop dt { color: #5d6b78; }
+.pop dd { margin: 0; font-family: var(--font-data); font-size: 12px; }
+
+@media (max-width: 600px) {
+  .panel { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; max-height: 55%; }
+  .panel.closed > :not(.head) { display: none; }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  #toggle { display: block; font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 4px; padding: 4px 10px; }
+}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<aside class="panel" id="panel">
+  <div class="head">
+    <h1>Ontario Grid Capacity</h1>
+    <button id="toggle" type="button" aria-expanded="true">Hide</button>
+  </div>
+
+  <section>
+    <h2>Capacity layer (OEB CCIM)</h2>
+    <select id="ccimLayer" aria-label="Capacity layer"></select>
+    <label class="opt"><input type="checkbox" id="showCcim" checked> Show capacity areas</label>
+    <div class="legend" id="ccimLegend"></div>
+    <p class="note">Untick a range to hide it. Colours show from zoom 12; click an area for feeder details.</p>
+  </section>
+
+  <section>
+    <h2>Power infrastructure (OpenStreetMap)</h2>
+    <label class="opt"><input type="checkbox" id="showOsm" checked> Show power infrastructure</label>
+    <div class="legend" id="osmLegend"></div>
+  </section>
+
+  <section>
+    <h2>Gas infrastructure (OpenStreetMap)</h2>
+    <label class="opt"><input type="checkbox" id="showGas" checked> Show gas infrastructure</label>
+    <div class="legend" id="gasLegend"></div>
+    <p class="note">OpenStreetMap has no gas pressure or flow data for Ontario, so pipelines are split by type. Transmission lines carry the most gas.</p>
+  </section>
+
+  <div class="status" id="ccimStatus" role="status"></div>
+  <div class="status" id="osmStatus" role="status"></div>
+
+  <div class="foot">
+    Capacity: <a href="https://oeb.planview.ca/Ontario-capacity-map/" target="_blank" rel="noopener">OEB Centralized Capacity Information Map</a>.
+    Infrastructure: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL), styled after <a href="https://openinframap.org" target="_blank" rel="noopener">Open Infrastructure Map</a>.
+    Capacity values are indicative; confirm with the local distributor.
+  </div>
+</aside>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
+<script src="infrastructure-ontario.js"></script>
+<script>
+const SVC = 'https://gis.planview.ca/server/rest/services/OEB/OEB_Available_Capacity/';
+const DETAIL_ZOOM = 12;   // below this, feeder polygons are drawn server-side as an image
+
+// Ranges ordered worst -> best; colours run red -> green. Values are exactly what the service returns.
+const MW = ['0 MW - restricted', 'Up to 0.5 MW', 'Up to 1 MW', 'Up to 3 MW', 'Up to 10 MW', '> 10 MW'];
+const LAYERS = [
+  { id: 0, name: 'Available load capacity', unit: 'MW', ranges: ['0.0 - 1.0', '1.1 - 3.0', '3.1 - 5.0', '5.1 - 10.0', '10.0 +'] },
+  { id: 2, name: 'DER: inverter-based, exporting', ranges: MW },
+  { id: 3, name: 'DER: inverter-based, non-exporting', ranges: MW },
+  { id: 5, name: 'DER: non-inverter, exporting', ranges: MW },
+  { id: 6, name: 'DER: non-inverter, non-exporting', ranges: MW },
+  { id: 4, name: 'DER: micro (≤10 kW class)', ranges: ['0 kW - restricted', 'Up to 10 kW', 'Up to 100 kW', '> 100 kW'] },
+];
+const RAMP = ['#d73027', '#fc8d59', '#fee08b', '#d9ef8b', '#91cf60', '#1a9850'];
+const NO_DATA = '#9aa5b1';
+
+function rangeColor(layer, range) {
+  const i = layer.ranges.indexOf(range);
+  if (i < 0) return NO_DATA;
+  // spread n ranges across the 6-step ramp so both ends are always red and green
+  return RAMP[Math.round(i * (RAMP.length - 1) / (layer.ranges.length - 1))];
+}
+
+// OSM voltage classes (kV), highest first
+const VOLT = [[500, '#b2182b', '500 kV'], [200, '#7b3294', '230 kV'], [100, '#2166ac', '115 kV'],
+              [25, '#e08214', '25–69 kV'], [0, '#6b7785', 'Under 25 kV / unknown']];
+function voltColor(tags) {
+  const kv = Math.max(0, ...String(tags.voltage || '').split(';').map(v => parseFloat(v) / 1000).filter(v => v > 0));
+  return VOLT.find(([min]) => kv >= min)[1];
+}
+
+// --- self-check of the colour logic (runs once, logs to console only on failure)
+console.assert(rangeColor(LAYERS[0], '0.0 - 1.0') === RAMP[0] && rangeColor(LAYERS[0], '10.0 +') === RAMP[5], 'load ramp ends');
+console.assert(rangeColor(LAYERS[5], '> 100 kW') === RAMP[5] && rangeColor(LAYERS[1], null) === NO_DATA, 'micro/no-data');
+console.assert(voltColor({ voltage: '500000;230000' }) === VOLT[0][1] && voltColor({ voltage: '27600' }) === VOLT[3][1] && voltColor({}) === VOLT[4][1], 'voltage classes');
+
+// --- map
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([43.75, -79.45], 12);   // canvas: SVG chokes on ~18k feeder polygons
+L.control.zoom({ position: 'topright' }).addTo(map);
+L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
+// Esri canvas basemap: works from file:// (OSM's tile servers 403 requests without a Referer) and has a dark variant.
+// shortcut: Esri's keyless tile endpoint is fine for personal use; for a public/commercial site, get an ArcGIS key or host tiles.
+const canvas = dark ? 'World_Dark_Gray' : 'World_Light_Gray';
+const esriTile = name => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/${name}/MapServer/tile/{z}/{y}/{x}`;
+L.tileLayer(esriTile(canvas + '_Base'), { maxNativeZoom: 16, maxZoom: 19, attribution: 'Basemap © Esri, HERE, Garmin, © OpenStreetMap contributors' }).addTo(map);
+L.tileLayer(esriTile(canvas + '_Reference'), { maxNativeZoom: 16, maxZoom: 19, pane: 'shadowPane' }).addTo(map);   // place labels above the capacity polygons
+map.createPane('osm').style.zIndex = 450;   // power lines above capacity polygons
+
+const $ = id => document.getElementById(id);
+const setStatus = (id, msg, err) => { $(id).textContent = msg; $(id).classList.toggle('err', !!err); };
+const ccimStatus = (m, e) => setStatus('ccimStatus', m, e), osmStatus = (m, e) => setStatus('osmStatus', m, e);
+
+// --- CCIM capacity layer
+let current = LAYERS[0], featLayer, overview;
+const fmtDate = ms => ms ? new Date(ms).toISOString().slice(0, 10) : '—';
+const esc = v => String(v).replace(/[<>&"]/g, c => `&#${c.charCodeAt(0)};`);
+const row = (k, v) => v == null || v === '' ? '' : `<dt>${k}</dt><dd>${esc(v)}</dd>`;
+
+function ccimPopup(layer) {
+  const p = layer.feature.properties;
+  const kv = [p.feeder_ltl_voltage_3ph && `${p.feeder_ltl_voltage_3ph} kV (3φ L-L)`, p.feeder_ltn_voltage_1ph && `${p.feeder_ltn_voltage_1ph} kV (1φ L-N)`].filter(Boolean).join(', ');
+  return `<div class="pop"><h3>${current.name}</h3><dl>
+    ${row('Available', p.capacityrange ? p.capacityrange + (current.unit ? ' ' + current.unit : '') : 'Not reported')}
+    ${row('Exact value', p.capacity)}
+    ${row('Distributor', p.ldc_name)}
+    ${row('Feeder ID', p.idldc)}
+    ${row('Feeder', p.feeder_name)}
+    ${row('Station', p.station_name)}
+    ${row('Upstream station', p.upstream_station_name)}
+    ${row('Upstream feeder', p.upstream_feeder_name)}
+    ${row('Upstream capacity', p.upstream_capacity)}
+    ${row('Voltage', kv)}
+    ${row('Configuration', p.configuration)}
+    ${row('Last update', fmtDate(p.last_update))}
+  </dl></div>`;
+}
+
+function buildCcim() {
+  featLayer?.remove(); overview?.remove();
+  const layer = current;
+  renderLegend();   // fresh legend: every range ticked
+  const where = rangeWhere(checkedKeys($('ccimLegend')));
+  featLayer = L.esri.featureLayer({
+    url: SVC + 'FeatureServer/' + layer.id, simplifyFactor: 0.35, precision: 5, where,
+    style: f => ({ color: '#4a5560', weight: 0.6, fillColor: rangeColor(layer, f.properties.capacityrange), fillOpacity: 0.55 }),
+  }).bindPopup(ccimPopup);
+  featLayer.on('loading', () => ccimStatus('Loading capacity areas…'));
+  featLayer.on('load', () => ccimStatus(''));
+  featLayer.on('requesterror', e => ccimStatus('Capacity service error: ' + (e.message || 'request failed'), true));
+  overview = L.esri.dynamicMapLayer({ url: SVC + 'MapServer', layers: [layer.id], layerDefs: { [layer.id]: where }, opacity: 0.6 });
+  syncCcim();
+}
+
+function syncCcim() {
+  const on = $('showCcim').checked, detail = map.getZoom() >= DETAIL_ZOOM;
+  // only add/remove on change, so panning doesn't refetch everything
+  for (const [l, want] of [[featLayer, on && detail], [overview, on && !detail]]) {
+    if (want && !map.hasLayer(l)) map.addLayer(l);
+    if (!want && map.hasLayer(l)) map.removeLayer(l);
+  }
+}
+
+// One checkbox per legend row; returns the container. Rows carry data-key.
+function checkRows(el, rows, onchange) {
+  el.innerHTML = rows.map(r => `<label><input type="checkbox" data-key="${esc(r.key)}" checked>${r.swatch}<span>${r.label}</span></label>`).join('');
+  el.onchange = onchange;
+  return el;
+}
+const checkedKeys = el => [...el.querySelectorAll('input:checked')].map(i => i.dataset.key);
+
+const NULL_KEY = '__none__';
+function renderLegend() {
+  const unit = current.unit ? ' ' + current.unit : '';
+  checkRows($('ccimLegend'), [
+    ...current.ranges.map(r => ({ key: r, label: r + unit, swatch: `<span class="sw" style="background:${rangeColor(current, r)}"></span>` })),
+    { key: NULL_KEY, label: 'Not reported', swatch: `<span class="sw" style="background:${NO_DATA}"></span>` },
+  ], applyRangeFilter);
+}
+
+// SQL where-clause for the ticked ranges (filtered on the OEB server, so it applies at every zoom)
+function rangeWhere(keys) {
+  const vals = keys.filter(k => k !== NULL_KEY).map(k => `'${k.replace(/'/g, "''")}'`);
+  const parts = [vals.length && `capacityrange IN (${vals.join(',')})`, keys.includes(NULL_KEY) && 'capacityrange IS NULL'].filter(Boolean);
+  return parts.length ? parts.join(' OR ') : '1=0';
+}
+console.assert(rangeWhere(['10.0 +', NULL_KEY]) === "capacityrange IN ('10.0 +') OR capacityrange IS NULL" && rangeWhere([]) === '1=0', 'rangeWhere');
+
+function applyRangeFilter() {
+  const where = rangeWhere(checkedKeys($('ccimLegend')));
+  featLayer.setWhere(where);
+  overview.setLayerDefs({ [current.id]: where });
+}
+
+LAYERS.forEach(l => $('ccimLayer').add(new Option(l.name, l.id)));
+$('ccimLayer').onchange = e => { current = LAYERS.find(l => l.id == e.target.value); buildCcim(); };
+$('showCcim').onchange = syncCcim;
+
+// --- OpenStreetMap infrastructure (static extract from fetch_infrastructure.py), split into toggleable categories
+const osmSvg = L.svg({ pane: 'osm' });   // SVG, not canvas: a canvas on top would swallow clicks meant for capacity areas
+const PLANT = { color: '#b7950b', weight: 1, fillColor: '#f1c40f', fillOpacity: 0.4 };
+const SUB = { color: '#333', weight: 2, fillOpacity: 0.15 };
+const lineSw = c => `<span class="sw ln" style="background:${c}"></span>`;
+const dotSw = c => `<span class="sw" style="background:transparent;border:2px solid ${c};border-radius:50%;width:10px;height:10px;margin:0 2px"></span>`;
+const boxSw = c => `<span class="sw" style="background:${c}"></span>`;
+
+const POWER_CATS = [
+  ...VOLT.map(([, c, label], i) => ({ key: 'v' + i, label: label + ' lines', swatch: lineSw(c) })),
+  { key: 'substation', label: 'Substations', swatch: dotSw('#333') },
+  { key: 'plant', label: 'Power plants', swatch: boxSw('#f1c40f') },
+];
+function powerCat(t) {
+  if (t.power === 'substation' || t.power === 'plant') return t.power;
+  if (t.power === 'line' || t.power === 'cable') return 'v' + VOLT.findIndex(([, c]) => c === voltColor(t));
+  return null;
+}
+console.assert(powerCat({ power: 'line', voltage: '230000' }) === 'v1' && powerCat({ power: 'cable' }) === 'v4' && powerCat({ power: 'plant' }) === 'plant', 'powerCat');
+
+function powerStyle(t) {
+  if (t.power === 'plant') return PLANT;
+  if (t.power === 'substation') return SUB;
+  return { color: voltColor(t), weight: t.power === 'line' ? 2.5 : 1.5, dashArray: t.power === 'cable' ? '4 4' : null };
+}
+
+// OSM gas data has no pressure/flow (0 of ~580 Ontario pipelines tag pressure), so pipeline usage is the best size proxy
+const GAS_CATS = [
+  { key: 'transmission', label: 'Transmission pipelines', swatch: lineSw('#8a4b08') },
+  { key: 'pipeline', label: 'Other gas pipelines', swatch: lineSw('#d99a1e') },
+  { key: 'station', label: 'Compressor / regulator stations', swatch: dotSw('#8a4b08') },
+  { key: 'well', label: 'Gas & petroleum wells', swatch: dotSw('#6b7785') },
+  { key: 'storage', label: 'Gas storage tanks', swatch: boxSw('#d99a1e') },
+];
+function gasCat(t) {
+  if (/oil/i.test(t.substance || '')) return null;
+  if (t.man_made === 'pipeline') return t.usage === 'transmission' ? 'transmission' : 'pipeline';
+  if (t.pipeline === 'substation') return 'station';
+  if (t.man_made === 'petroleum_well') return 'well';
+  if (t.man_made === 'storage_tank') return 'storage';
+  return null;
+}
+console.assert(gasCat({ man_made: 'pipeline', usage: 'transmission' }) === 'transmission' && gasCat({ pipeline: 'substation', substance: 'oil' }) === null, 'gasCat');
+function gasStyle(t) {
+  const c = gasCat(t);
+  if (c === 'transmission') return { color: '#8a4b08', weight: 3.5, dashArray: '10 4' };
+  if (c === 'pipeline') return { color: '#d99a1e', weight: 2, dashArray: '6 4' };
+  if (c === 'well') return { color: '#6b7785', weight: 2, fillOpacity: 0.3, radius: 3 };
+  if (c === 'storage') return { color: '#8a4b08', weight: 1, fillColor: '#d99a1e', fillOpacity: 0.6 };
+  return { color: '#8a4b08', weight: 2, fillColor: '#d99a1e', fillOpacity: 0.5 };
+}
+
+function osmPopup(t) {
+  const kind = (t.power || t.man_made || t.pipeline || t.industrial || 'feature').replace(/_/g, ' ');
+  const v = t.voltage ? t.voltage.split(';').map(x => (parseFloat(x) / 1000) + ' kV').join(' / ') : null;
+  return `<div class="pop"><h3>${t.name ? esc(t.name) : kind[0].toUpperCase() + kind.slice(1)}</h3><dl>
+    ${row('Type', kind)}${row('Substance', t.substance)}${row('Voltage', v)}${row('Pressure', t.pressure)}${row('Diameter', t.diameter)}
+    ${row('Usage', t.usage)}${row('Operator', t.operator)}${row('Circuits', t.circuits)}
+    ${row('Source', t['plant:source'])}${row('Output', t['plant:output:electricity'])}${row('Ref', t.ref)}</dl></div>`;
+}
+
+// Build one Leaflet layer per category; the legend checkboxes add/remove them.
+function infraGroup({ features, cats, catOf, style, master, legend }) {
+  const byCat = Object.fromEntries(cats.map(c => [c.key, []]));
+  for (const f of features) { const k = catOf(f.properties); if (k in byCat) byCat[k].push(f); }
+  const layers = Object.fromEntries(cats.map(c => [c.key, L.geoJSON(byCat[c.key], {
+    pane: 'osm', renderer: osmSvg,
+    style: f => style(f.properties),
+    pointToLayer: (f, ll) => L.circleMarker(ll, { radius: 5, ...style(f.properties), pane: 'osm', renderer: osmSvg }),
+  }).bindPopup(l => osmPopup(l.feature.properties))]));
+  const counts = cats.map(c => ({ ...c, label: `${c.label} <span class="note">${byCat[c.key].length.toLocaleString()}</span>` }));
+  const sync = () => {
+    const on = new Set($(master).checked ? checkedKeys($(legend)) : []);
+    for (const [k, l] of Object.entries(layers)) on.has(k) ? l.addTo(map) : l.remove();
+  };
+  checkRows($(legend), counts, sync);
+  $(master).onchange = sync;
+  sync();
+}
+
+const DATA = window.INFRA;
+if (DATA) {
+  const isGas = t => !!t.gas;   // tagged by fetch_infrastructure.py
+  infraGroup({ features: DATA.features.filter(f => !isGas(f.properties)), cats: POWER_CATS, catOf: powerCat, style: powerStyle, master: 'showOsm', legend: 'osmLegend' });
+  infraGroup({ features: DATA.features.filter(f => isGas(f.properties)), cats: GAS_CATS, catOf: gasCat, style: gasStyle, master: 'showGas', legend: 'gasLegend' });
+  osmStatus(`${DATA.features.length.toLocaleString()} infrastructure features (OpenStreetMap, ${window.INFRA_DATE}).`);
+} else {
+  osmStatus('Infrastructure data missing: run "python fetch_infrastructure.py" in this folder, then reload.', true);
+}
+
+map.on('zoomend', syncCcim);
+
+$('toggle').onclick = () => {
+  const closed = $('panel').classList.toggle('closed');
+  $('toggle').textContent = closed ? 'Show' : 'Hide';
+  $('toggle').setAttribute('aria-expanded', String(!closed));
+};
+
+buildCcim();
+</script>
+</body>
+</html>
