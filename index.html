@@ -144,6 +144,15 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
     </div>
   </details>
 
+  <details class="sec">
+    <summary>Fibre &amp; telecom</summary>
+    <div class="sec-body">
+    <label class="opt"><input type="checkbox" id="showTelecom"> Show fibre &amp; telecom</label>
+    <div class="legend" id="telecomLegend"></div>
+    <p class="note">No public map of Canada's fibre trunk routes exists. OpenStreetMap lines are volunteer-mapped and incomplete. Northwestel and N.W.T. routes are official (N.W.T. government). ISED flags communities with no fibre backbone nearby.</p>
+    </div>
+  </details>
+
   <div class="status" id="ccimStatus" role="status"></div>
   <div class="status" id="osmStatus" role="status"></div>
 
@@ -157,7 +166,7 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
-<script src="infrastructure-ontario.js"></script>
+<script src="data/index.js"></script>
 <script>
 const SVC = 'https://gis.planview.ca/server/rest/services/OEB/OEB_Available_Capacity/';
 const DETAIL_ZOOM = 12;   // below this, feeder polygons are drawn server-side as an image
@@ -271,7 +280,7 @@ function syncCcim() {
 
 // One checkbox per legend row; returns the container. Rows carry data-key.
 function checkRows(el, rows, onchange) {
-  el.innerHTML = rows.map(r => `<label><input type="checkbox" data-key="${esc(r.key)}" checked>${r.swatch}<span>${r.label}</span></label>`).join('');
+  el.innerHTML = rows.map(r => `<label><input type="checkbox" data-key="${esc(r.key)}"${r.off ? '' : ' checked'}>${r.swatch}<span>${r.label}</span></label>`).join('');
   el.onchange = onchange;
   return el;
 }
@@ -335,7 +344,7 @@ const GAS_CATS = [
   { key: 'transmission', label: 'Transmission pipelines', swatch: lineSw('#8a4b08') },
   { key: 'pipeline', label: 'Other gas pipelines', swatch: lineSw('#d99a1e') },
   { key: 'station', label: 'Compressor / regulator stations', swatch: dotSw('#8a4b08') },
-  { key: 'well', label: 'Gas & petroleum wells', swatch: dotSw('#6b7785') },
+  { key: 'well', label: 'Gas & petroleum wells', swatch: dotSw('#6b7785'), off: true },   // ~30k points in AB/SK: off by default
   { key: 'storage', label: 'Gas storage tanks', swatch: boxSw('#d99a1e') },
 ];
 function gasCat(t) {
@@ -357,42 +366,129 @@ function gasStyle(t) {
 }
 
 function osmPopup(t) {
-  const kind = (t.power || t.man_made || t.pipeline || t.industrial || 'feature').replace(/_/g, ' ');
+  const kind = (t.kind || t.power || t.man_made || t.pipeline || t.telecom || (t.communication === 'line' && 'telecom line') || t.industrial || 'feature').replace(/_/g, ' ');
   const v = t.voltage ? t.voltage.split(';').map(x => (parseFloat(x) / 1000) + ' kV').join(' / ') : null;
   return `<div class="pop"><h3>${t.name ? esc(t.name) : kind[0].toUpperCase() + kind.slice(1)}</h3><dl>
     ${row('Type', kind)}${row('Substance', t.substance)}${row('Voltage', v)}${row('Pressure', t.pressure)}${row('Diameter', t.diameter)}
-    ${row('Usage', t.usage)}${row('Operator', t.operator)}${row('Circuits', t.circuits)}
+    ${row('Status', t.status)}${row('Medium', t['telecom:medium'])}${row('Usage', t.usage)}${row('Operator', t.operator)}${row('Circuits', t.circuits)}
     ${row('Source', t['plant:source'])}${row('Output', t['plant:output:electricity'])}${row('Ref', t.ref)}</dl></div>`;
 }
 
-// Build one Leaflet layer per category; the legend checkboxes add/remove them.
-function infraGroup({ features, cats, catOf, style, master, legend }) {
-  const byCat = Object.fromEntries(cats.map(c => [c.key, []]));
-  for (const f of features) { const k = catOf(f.properties); if (k in byCat) byCat[k].push(f); }
-  const layers = Object.fromEntries(cats.map(c => [c.key, L.geoJSON(byCat[c.key], {
+// One Leaflet layer per category (legend checkboxes add/remove them); province data is added as it loads.
+function infraGroup({ cats, catOf, style, master, legend, extra = {}, onFirstShow }) {
+  const layers = Object.fromEntries(cats.map(c => [c.key, L.geoJSON(null, {
     pane: 'osm', renderer: osmSvg,
     style: f => style(f.properties),
     pointToLayer: (f, ll) => L.circleMarker(ll, { radius: 5, ...style(f.properties), pane: 'osm', renderer: osmSvg }),
   }).bindPopup(l => osmPopup(l.feature.properties))]));
-  const counts = cats.map(c => ({ ...c, label: `${c.label} <span class="note">${byCat[c.key].length.toLocaleString()}</span>` }));
-  const sync = () => {
+  Object.assign(layers, extra);   // live layers that aren't loaded from our data files
+  const counts = Object.fromEntries(cats.map(c => [c.key, 0]));
+  checkRows($(legend), cats.map(c => ({ ...c, label: `${c.label} <span class="note" data-count="${c.key}">0</span>` })), sync);
+  function sync() {
+    if ($(master).checked && onFirstShow) { onFirstShow(); onFirstShow = null; }
     const on = new Set($(master).checked ? checkedKeys($(legend)) : []);
     for (const [k, l] of Object.entries(layers)) on.has(k) ? l.addTo(map) : l.remove();
-  };
-  checkRows($(legend), counts, sync);
+  }
   $(master).onchange = sync;
   sync();
+  return features => {
+    const byCat = Object.fromEntries(cats.map(c => [c.key, []]));
+    for (const f of features) { const k = catOf(f.properties); if (k in byCat) byCat[k].push(f); }
+    for (const c of cats) {
+      if (!byCat[c.key].length) continue;   // also skips live `extra` layers, which have no addData
+      layers[c.key].addData(byCat[c.key]);
+      counts[c.key] += byCat[c.key].length;
+      $(legend).querySelector(`[data-count="${c.key}"]`).textContent = counts[c.key].toLocaleString();
+    }
+  };
 }
+const addPower = infraGroup({ cats: POWER_CATS, catOf: powerCat, style: powerStyle, master: 'showOsm', legend: 'osmLegend' });
+const addGas = infraGroup({ cats: GAS_CATS, catOf: gasCat, style: gasStyle, master: 'showGas', legend: 'gasLegend' });
 
-const DATA = window.INFRA;
-if (DATA) {
-  const isGas = t => !!t.gas;   // tagged by fetch_infrastructure.py
-  infraGroup({ features: DATA.features.filter(f => !isGas(f.properties)), cats: POWER_CATS, catOf: powerCat, style: powerStyle, master: 'showOsm', legend: 'osmLegend' });
-  infraGroup({ features: DATA.features.filter(f => isGas(f.properties)), cats: GAS_CATS, catOf: gasCat, style: gasStyle, master: 'showGas', legend: 'gasLegend' });
-  osmStatus(`${DATA.features.length.toLocaleString()} infrastructure features (OpenStreetMap, ${window.INFRA_DATE}).`);
-} else {
-  osmStatus('Infrastructure data missing: run "python fetch_infrastructure.py" in this folder, then reload.', true);
+// --- Fibre & telecom: OpenStreetMap (data/telecom.js), ISED community backbone flags (data/nbd-backbone.js),
+// and live official fibre routes from the N.W.T. government's ArcGIS service. Loaded the first time it's switched on.
+const FIBRE = '#0f8b8d', FIBRE_OFFICIAL = '#1b5e20';
+const GNWT = 'https://www.apps.geomatics.gov.nt.ca/arcgis/rest/services/GNWT/UtilitiesCommunication_LCC/MapServer/';
+// popup listing a live layer's own fields, minus ids and CAD export fields
+const attrPopup = (title, l) => `<div class="pop"><h3>${title}</h3><dl>${Object.entries(l.feature.properties)
+  .filter(([k, v]) => !/^(OBJECTID|Shape.*|FID.*|sd_.*|Color|Linetype|Elevation|LineWt)$/i.test(k) && v != null && String(v).trim() !== '').map(([k, v]) => row(k, v)).join('')}</dl></div>`;
+const gnwtFibre = (id, title) => L.esri.featureLayer({ url: GNWT + id, pane: 'osm', renderer: osmSvg,
+  style: () => ({ color: FIBRE_OFFICIAL, weight: 3.5 }) }).bindPopup(l => attrPopup(title, l));
+const TELECOM_CATS = [
+  { key: 'line', label: 'Telecom / fibre lines (OSM)', swatch: lineSw(FIBRE) },
+  { key: 'official', label: 'Northwestel fibre (official)', swatch: lineSw(FIBRE_OFFICIAL) },
+  { key: 'nwt', label: 'N.W.T. fibre link (official)', swatch: lineSw(FIBRE_OFFICIAL) },
+  { key: 'data_center', label: 'Data centres', swatch: boxSw('#6a1b9a') },
+  { key: 'exchange', label: 'Telephone exchanges', swatch: dotSw(FIBRE) },
+  { key: 'nofibre', label: 'Communities without fibre backbone (ISED)', swatch: dotSw('#d73027') },
+  { key: 'sat', label: 'Satellite-dependent communities (ISED)', swatch: dotSw('#fc8d59') },
+];
+function telecomCat(t) {
+  if (t.nbd) return t.nbd;
+  if (t.communication === 'line' || t.telecom === 'line' || t.telecom === 'cable') return 'line';   // exchanges carry communication=yes
+  return t.telecom;   // data_center | exchange
 }
+console.assert(telecomCat({ communication: 'line' }) === 'line' && telecomCat({ telecom: 'exchange', communication: 'yes' }) === 'exchange' && telecomCat({ nbd: 'sat' }) === 'sat', 'telecomCat');
+function telecomStyle(t) {
+  const c = telecomCat(t);
+  if (c === 'line') return { color: FIBRE, weight: 2, dashArray: '1 4', lineCap: 'round' };
+  if (c === 'data_center') return { color: '#6a1b9a', weight: 1.5, fillColor: '#6a1b9a', fillOpacity: 0.5 };
+  if (c === 'nofibre') return { color: '#d73027', weight: 2, fillOpacity: 0.5, radius: 4 };
+  if (c === 'sat') return { color: '#fc8d59', weight: 2, fillOpacity: 0.5, radius: 4 };
+  return { color: FIBRE, weight: 2, fillOpacity: 0.3, radius: 3 };
+}
+const addTelecom = infraGroup({
+  cats: TELECOM_CATS, catOf: telecomCat, style: telecomStyle, master: 'showTelecom', legend: 'telecomLegend',
+  extra: { official: gnwtFibre(16, 'Northwestel fibre line'), nwt: gnwtFibre(18, 'N.W.T. fibre optic line') },
+  onFirstShow: () => ['data/telecom.js', 'data/nbd-backbone.js'].forEach(src => {
+    const tag = document.createElement('script');
+    tag.src = src;
+    tag.onerror = () => osmStatus(`Could not load ${src}: run "python fetch_telecom.py" in this folder.`, true);
+    document.head.append(tag);
+  }),
+});
+document.querySelectorAll('#telecomLegend [data-count="official"], #telecomLegend [data-count="nwt"]').forEach(el => el.textContent = 'live');
+window.TELECOM_LOADED = fc => addTelecom(fc.features);
+window.NBD_LOADED = pts => addTelecom(pts.flatMap(([lon, lat, name, nofibre, sat]) => [
+  nofibre && { kind: 'community', status: 'No fibre backbone nearby (ISED)', nbd: 'nofibre' },
+  sat && { kind: 'community', status: 'Satellite-dependent (ISED)', nbd: 'sat' },
+].filter(Boolean).map(p => ({ type: 'Feature', properties: { ...p, name }, geometry: { type: 'Point', coordinates: [lon, lat] } }))));
+
+// Province files (data/CA-XX.js, from fetch_infrastructure.py) load via <script> when the view reaches them,
+// so the map also works opened straight from disk. Below LOAD_ZOOM, nothing new loads (all of Canada is ~20 MB).
+const LOAD_ZOOM = 5;
+const INDEX = window.INFRA_INDEX || {};
+const provinces = Object.fromEntries(Object.entries(INDEX).map(([code, p]) =>
+  [code, { ...p, bounds: L.latLngBounds([p.bbox[1], p.bbox[0]], [p.bbox[3], p.bbox[2]]), state: 'idle' }]));
+window.INFRA_LOADED = (code, fc) => {
+  const isGas = f => !!f.properties.gas;   // tagged by fetch_infrastructure.py
+  addPower(fc.features.filter(f => !isGas(f)));
+  addGas(fc.features.filter(isGas));
+  provinces[code].state = 'loaded';
+  infraStatus();
+};
+function infraStatus() {
+  const all = Object.values(provinces);
+  if (!all.length) return osmStatus('Infrastructure data missing: run "python fetch_infrastructure.py" in this folder, then reload.', true);
+  const done = all.filter(p => p.state === 'loaded'), busy = all.filter(p => p.state === 'loading');
+  const n = done.reduce((s, p) => s + p.count, 0);
+  osmStatus((busy.length ? `Loading ${busy.map(p => p.name).join(', ')}… ` : '')
+    + (done.length ? `Infrastructure loaded for ${done.map(p => p.name).join(', ')} (${n.toLocaleString()} features, OpenStreetMap ${done[0].date}).` : '')
+    + (map.getZoom() < LOAD_ZOOM && done.length < all.length ? ` Zoom in to load other provinces.` : ''));
+}
+function loadVisibleProvinces() {
+  if (map.getZoom() >= LOAD_ZOOM) for (const [code, p] of Object.entries(provinces)) {
+    if (p.state !== 'idle' || !p.bounds.intersects(map.getBounds())) continue;
+    p.state = 'loading';
+    const tag = document.createElement('script');
+    tag.src = `data/${code}.js`;
+    tag.onerror = () => { p.state = 'idle'; osmStatus(`Could not load ${p.name} data (data/${code}.js).`, true); };
+    document.head.append(tag);
+  }
+  infraStatus();
+}
+map.on('moveend', loadVisibleProvinces);
+loadVisibleProvinces();
 
 map.on('zoomend', syncCcim);
 
