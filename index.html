@@ -216,7 +216,9 @@ const systemDark = matchMedia('(prefers-color-scheme: dark)');
 const savedTheme = (() => { try { return localStorage.getItem('theme'); } catch { return null; } })();
 if (savedTheme === 'light' || savedTheme === 'dark') document.documentElement.dataset.theme = savedTheme;
 const isDark = () => (document.documentElement.dataset.theme || (systemDark.matches ? 'dark' : 'light')) === 'dark';
-const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([43.75, -79.45], 12);   // canvas: SVG chokes on ~18k feeder polygons
+const map = L.map('map', { zoomControl: false, preferCanvas: true });   // canvas: SVG chokes on ~18k feeder polygons
+// Open on all of Canada (south of the high Arctic, which Web Mercator inflates); on wide screens keep it clear of the sidebar
+map.fitBounds([[41.7, -141], [70, -52.6]], { paddingTopLeft: [innerWidth > 600 ? 330 : 0, 0] });
 L.control.zoom({ position: 'topright' }).addTo(map);
 L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
 // Esri canvas basemap: works from file:// (OSM's tile servers 403 requests without a Referer) and has a dark variant.
@@ -512,7 +514,7 @@ function infraStatus() {
   const n = done.reduce((s, p) => s + p.count, 0);
   osmStatus((busy.length ? `Loading ${busy.map(p => p.name).join(', ')}… ` : '')
     + (done.length ? `Infrastructure loaded for ${done.map(p => p.name).join(', ')} (${n.toLocaleString()} features, OpenStreetMap ${done[0].date}).` : '')
-    + (map.getZoom() < LOAD_ZOOM && done.length < all.length ? ` Zoom in to load other provinces.` : ''));
+    + (map.getZoom() < LOAD_ZOOM && done.length < all.length ? (done.length ? ' Zoom in to load other provinces.' : 'Zoom in to a province to load its power and gas infrastructure.') : ''));
 }
 function loadVisibleProvinces() {
   if (map.getZoom() >= LOAD_ZOOM) for (const [code, p] of Object.entries(provinces)) {
