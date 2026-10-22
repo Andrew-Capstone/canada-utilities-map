@@ -1,4 +1,4 @@
-# Ontario Grid Capacity Map
+# Canada Utilities Map
 
 One map combining:
 
