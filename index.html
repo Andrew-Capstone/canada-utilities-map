@@ -173,9 +173,15 @@ L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
 // Esri canvas basemap: works from file:// (OSM's tile servers 403 requests without a Referer) and has a dark variant.
 // shortcut: Esri's keyless tile endpoint is fine for personal use; for a public/commercial site, get an ArcGIS key or host tiles.
 const canvas = dark ? 'World_Dark_Gray' : 'World_Light_Gray';
-const esriTile = name => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/${name}/MapServer/tile/{z}/{y}/{x}`;
-L.tileLayer(esriTile(canvas + '_Base'), { maxNativeZoom: 16, maxZoom: 19, attribution: 'Basemap © Esri, HERE, Garmin, © OpenStreetMap contributors' }).addTo(map);
-L.tileLayer(esriTile(canvas + '_Reference'), { maxNativeZoom: 16, maxZoom: 19, pane: 'shadowPane' }).addTo(map);   // place labels above the capacity polygons
+const esriTile = (name, o = {}) => L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/${name}/MapServer/tile/{z}/{y}/{x}`, { maxNativeZoom: 16, maxZoom: 19, ...o });
+const labels = name => esriTile(name, { pane: 'shadowPane' });   // place labels above the capacity polygons
+const BASEMAPS = {
+  Grey: L.layerGroup([esriTile(`Canvas/${canvas}_Base`, { attribution: 'Basemap © Esri, HERE, Garmin, © OpenStreetMap contributors' }), labels(`Canvas/${canvas}_Reference`)]),
+  Satellite: L.layerGroup([esriTile('World_Imagery', { maxNativeZoom: 18, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' }), labels('Reference/World_Boundaries_and_Places')]),
+  Topographic: esriTile('World_Topo_Map', { maxNativeZoom: 18, attribution: 'Basemap © Esri, HERE, Garmin, NRCan, © OpenStreetMap contributors' }),
+};
+BASEMAPS.Grey.addTo(map);
+L.control.layers(BASEMAPS, null, { position: 'topright', collapsed: matchMedia('(max-width: 600px)').matches }).addTo(map);
 map.createPane('osm').style.zIndex = 450;   // power lines above capacity polygons
 
 const $ = id => document.getElementById(id);

@@ -19,4 +19,4 @@ This rewrites `infrastructure-ontario.js` from OpenStreetMap. The capacity data 
 
 - Capacity: Ontario Energy Board CCIM. Values are indicative; confirm with the local distributor. No reuse licence is stated, so check with the OEB before commercial use.
 - Infrastructure: © OpenStreetMap contributors, ODbL.
-- Basemap: Esri Light/Dark Gray Canvas.
+- Basemaps: Esri Light/Dark Gray Canvas, World Imagery (satellite) and World Topographic.
