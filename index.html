@@ -95,6 +95,16 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   </section>
 
   <section>
+    <h2>Contour lines</h2>
+    <label class="opt"><input type="checkbox" id="showContours"> Show contour lines</label>
+    <div class="units">
+      <label for="contourUnit">Units<select id="contourUnit"><option value="m">Metres</option><option value="ft">Feet</option></select></label>
+      <label for="contourStep">Interval<select id="contourStep"></select></label>
+    </div>
+    <p class="note">Drawn from 20–30 m elevation data, accurate to a few metres. Intervals under 5 m (15 ft) are smoothed estimates, not survey lines. Shown from zoom 12. For a clean background, use the Hillshade basemap; Esri's Topographic map has its own fixed contours.</p>
+  </section>
+
+  <section>
     <h2>Capacity layer (OEB CCIM)</h2>
     <select id="ccimLayer" aria-label="Capacity layer"></select>
     <label class="opt"><input type="checkbox" id="showCcim" checked> Show capacity areas</label>
@@ -127,6 +137,7 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
 <script src="infrastructure-ontario.js"></script>
 <script>
 const SVC = 'https://gis.planview.ca/server/rest/services/OEB/OEB_Available_Capacity/';
@@ -178,6 +189,7 @@ const labels = name => esriTile(name, { pane: 'shadowPane' });   // place labels
 const BASEMAPS = {
   Grey: L.layerGroup([esriTile(`Canvas/${canvas}_Base`, { attribution: 'Basemap © Esri, HERE, Garmin, © OpenStreetMap contributors' }), labels(`Canvas/${canvas}_Reference`)]),
   Satellite: L.layerGroup([esriTile('World_Imagery', { maxNativeZoom: 18, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' }), labels('Reference/World_Boundaries_and_Places')]),
+  Hillshade: L.layerGroup([esriTile('Elevation/World_Hillshade', { attribution: 'Hillshade © Esri, USGS, NRCan' }), labels(`Canvas/${canvas}_Reference`)]),
   Topographic: esriTile('World_Topo_Map', { maxNativeZoom: 18, attribution: 'Basemap © Esri, HERE, Garmin, NRCan, © OpenStreetMap contributors' }),
 };
 BASEMAPS.Grey.addTo(map);
@@ -450,6 +462,93 @@ $('measureArea').onclick = () => draft?.kind === 'area' ? finishMeasure() : star
 $('measureFinish').onclick = finishMeasure;
 $('measureClear').onclick = () => { cancelMeasure(); measures.splice(0).forEach(m => m.layer.remove()); refreshOut(); };
 $('lenUnit').onchange = $('areaUnit').onchange = () => { measures.forEach(label); refreshOut(); };
+
+// --- Contour lines, drawn per tile from AWS Terrain Tiles (Terrarium PNG elevation, CORS-open, no key)
+const STEPS = { m: [1, 2, 5, 10, 20, 50], ft: [2, 5, 10, 20, 25, 50, 100, 200] };
+const FT = 0.3048;
+const elevCache = new Map();   // shortcut: unbounded per-session tile cache, fine for browsing a region; add LRU if memory grows
+function fillSteps() {
+  const u = $('contourUnit').value;
+  $('contourStep').replaceChildren(...STEPS[u].map(v => new Option(`${v} ${u}`, v)));
+  $('contourStep').value = u === 'm' ? 10 : 50;
+}
+// Terrarium encoding: metres = R*256 + G + B/256 - 32768
+const decodeElev = (r, g, b) => r * 256 + g + b / 256 - 32768;
+console.assert(decodeElev(128, 0, 0) === 0 && decodeElev(128, 100, 128) === 100.5, 'terrarium decode');
+// Contour levels in metres for an interval given in the chosen unit
+function levels(min, max, step, unit) {
+  const s = unit === 'ft' ? step * FT : step, out = [];
+  for (let v = Math.ceil(min / s) * s; v <= max; v += s) out.push(+v.toFixed(6));
+  return out;
+}
+console.assert(levels(3, 25, 10, 'm').join() === '10,20' && Math.abs(levels(0, 31, 100, 'ft')[1] - 30.48) < 1e-9, 'contour levels');
+
+async function tileElevation(c) {
+  const key = `${c.z}/${c.x}/${c.y}`;
+  if (!elevCache.has(key)) elevCache.set(key, (async () => {
+    const img = new Image(); img.crossOrigin = 'anonymous';
+    img.src = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${key}.png`;
+    await img.decode();
+    const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+    const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(img, 0, 0);
+    const px = cx.getImageData(0, 0, 256, 256).data, z = new Float32Array(65536);
+    for (let i = 0; i < 65536; i++) z[i] = decodeElev(px[i * 4], px[i * 4 + 1], px[i * 4 + 2]);
+    return z;
+  })().catch(e => { elevCache.delete(key); throw e; }));
+  return elevCache.get(key);
+}
+
+const Contours = L.GridLayer.extend({
+  createTile(c, done) {
+    const tile = document.createElement('canvas'), size = this.getTileSize();
+    tile.width = size.x; tile.height = size.y;
+    tileElevation(c).then(z => {
+      const unit = $('contourUnit').value, step = +$('contourStep').value, k = size.x / 256;
+      let min = Infinity, max = -Infinity;
+      for (const v of z) { if (v < min) min = v; if (v > max) max = v; }
+      const ctx = tile.getContext('2d'), lv = levels(min, max, step, unit);
+      const brown = '#a0522d';   // mid-tone: readable on the light and dark basemaps alike
+      for (const g of d3.contours().size([256, 256]).thresholds(lv)(z)) {
+        const n = Math.round((unit === 'ft' ? g.value / FT : g.value) / step), index = n % 5 === 0;
+        ctx.strokeStyle = brown; ctx.lineWidth = index ? 1.8 : 0.8; ctx.globalAlpha = index ? 0.95 : 0.7;
+        ctx.beginPath();
+        let best = null;
+        for (const poly of g.coordinates) for (const ring of poly) {
+          // d3 closes rings along the tile edge; skip those edge segments so tiles join without borders
+          let run = [];
+          const flush = () => { if (run.length > (best?.length || 1)) best = run; run = []; };
+          for (let i = 1; i < ring.length; i++) {
+            const [x0, y0] = ring[i - 1], [x1, y1] = ring[i];
+            const onEdge = (x0 === x1 && (x0 <= 0 || x0 >= 256)) || (y0 === y1 && (y0 <= 0 || y0 >= 256));
+            if (onEdge) { flush(); continue; }
+            ctx.moveTo(x0 * k, y0 * k); ctx.lineTo(x1 * k, y1 * k);
+            if (!run.length) run.push(ring[i - 1]);
+            run.push(ring[i]);
+          }
+          flush();
+        }
+        ctx.stroke();
+        if (index && best && best.length > 30) {   // label index contours at the middle of their longest run
+          const [x, y] = best[best.length >> 1], txt = `${Math.round(unit === 'ft' ? g.value / FT : g.value)} ${unit}`;
+          ctx.globalAlpha = 1; ctx.font = '600 11px "JetBrains Mono", Consolas, monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.lineWidth = 3; ctx.strokeStyle = '#ffffff'; ctx.strokeText(txt, x * k, y * k);
+          ctx.fillStyle = brown; ctx.fillText(txt, x * k, y * k);
+        }
+      }
+      done(null, tile);
+    }).catch(e => done(e, tile));
+    return tile;
+  },
+});
+map.createPane('contours').style.zIndex = 420;   // above capacity polygons, below power and gas lines
+map.getPane('contours').style.pointerEvents = 'none';
+const contourLayer = new Contours({ pane: 'contours', minZoom: 12, maxNativeZoom: 15, maxZoom: 19,
+  attribution: 'Elevation: <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a> (NRCan CDEM, SRTM)' });
+fillSteps();
+const syncContours = () => !$('showContours').checked ? contourLayer.remove() : map.hasLayer(contourLayer) ? contourLayer.redraw() : contourLayer.addTo(map);
+$('showContours').onchange = syncContours;
+$('contourUnit').onchange = () => { fillSteps(); syncContours(); };
+$('contourStep').onchange = syncContours;
 
 $('toggle').onclick = () => {
   const closed = $('panel').classList.toggle('closed');
