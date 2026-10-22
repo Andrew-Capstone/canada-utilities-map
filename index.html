@@ -439,9 +439,9 @@ const TELECOM_CATS = [
   { key: 'rail', label: 'Likely fibre corridors: rail mainlines (stand-in)', swatch: lineSw(RAIL) },
   { key: 'supernet', label: 'Alberta SuperNet sites, Edmonton region', swatch: dotSw('#1565c0') },
   { key: 'data_center', label: 'Data centres', swatch: boxSw('#6a1b9a') },
-  { key: 'exchange', label: 'Telephone exchanges', swatch: dotSw(FIBRE) },
-  { key: 'nofibre', label: 'Communities without fibre backbone (ISED)', swatch: dotSw('#d73027') },
-  { key: 'sat', label: 'Satellite-dependent communities (ISED)', swatch: dotSw('#fc8d59') },
+  { key: 'exchange', label: 'Telephone exchanges', swatch: dotSw(FIBRE), off: true },
+  { key: 'nofibre', label: 'Communities without fibre backbone (ISED)', swatch: dotSw('#d73027'), off: true },
+  { key: 'sat', label: 'Satellite-dependent communities (ISED)', swatch: dotSw('#fc8d59'), off: true },
 ];
 function telecomCat(t) {
   if (t.nbd) return t.nbd;
