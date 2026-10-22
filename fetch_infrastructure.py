@@ -32,7 +32,7 @@ area["ISO3166-2"="{{code}}"]->.on;
 out geom tags;"""
 KEEP = ("power", "name", "voltage", "operator", "circuits", "ref", "plant:source", "plant:output:electricity",
         "man_made", "pipeline", "substation", "substance", "pressure", "diameter", "usage", "location", "content",
-        "telecom", "communication", "telecom:medium")
+        "telecom", "communication", "telecom:medium", "railway", "usage", "owner")
 OUT_DIR = "data"  # .js files (not .json) so the map also works when opened straight from disk
 
 
@@ -65,7 +65,8 @@ def to_feature(el):
     elif el["type"] == "way":
         pts = [rnd(g) for g in el["geometry"]]
         linear = (tags.get("power") in ("line", "cable") or tags.get("man_made") == "pipeline"
-                  or tags.get("communication") == "line" or tags.get("telecom") in ("line", "cable"))
+                  or tags.get("communication") == "line" or tags.get("telecom") in ("line", "cable")
+                  or tags.get("railway") == "rail")
         closed = not linear and len(pts) > 3 and pts[0] == pts[-1]
         geom = {"type": "Polygon", "coordinates": [pts]} if closed else {"type": "LineString", "coordinates": pts}
     else:  # relation (multipolygon): keep outer rings only

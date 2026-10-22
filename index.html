@@ -14,9 +14,11 @@
   --font-body: "Barlow", "Segoe UI", Arial, sans-serif;
   --font-data: "JetBrains Mono", Consolas, monospace;
 }
+/* dark palette: follows the system unless the theme button picked one (data-theme on <html>) */
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #11171c; --panel: #1a232b; --fg: #e3e9ee; --muted: #93a2af; --line: #2d3a45; --accent: #4fb3dc; color-scheme: dark; }
+  :root:not([data-theme="light"]) { --bg: #11171c; --panel: #1a232b; --fg: #e3e9ee; --muted: #93a2af; --line: #2d3a45; --accent: #4fb3dc; color-scheme: dark; }
 }
+:root[data-theme="dark"] { --bg: #11171c; --panel: #1a232b; --fg: #e3e9ee; --muted: #93a2af; --line: #2d3a45; --accent: #4fb3dc; color-scheme: dark; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font-body); }
 #map { position: absolute; inset: 0; background: var(--bg); }
@@ -53,6 +55,8 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .foot { font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
 .foot a { color: var(--accent); }
 #toggle { display: none; }
+.head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+#themeBtn { padding: 3px 8px; font-size: 12px; white-space: nowrap; }
 .btns { display: flex; gap: 6px; flex-wrap: wrap; }
 .btn { font: inherit; padding: 5px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--fg); cursor: pointer; }
 .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--panel); }
@@ -74,7 +78,6 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 @media (max-width: 600px) {
   .panel { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; max-height: 55%; }
   .panel.closed > :not(.head) { display: none; }
-  .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   #toggle { display: block; font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 4px; padding: 4px 10px; }
 }
 </style>
@@ -85,7 +88,10 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 <aside class="panel" id="panel">
   <div class="head">
     <h1>Ontario Grid Capacity</h1>
-    <button id="toggle" type="button" aria-expanded="true">Hide</button>
+    <div class="btns">
+      <button class="btn" id="themeBtn" type="button"></button>
+      <button id="toggle" type="button" aria-expanded="true">Hide</button>
+    </div>
   </div>
 
   <details class="sec">
@@ -149,7 +155,7 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
     <div class="sec-body">
     <label class="opt"><input type="checkbox" id="showTelecom"> Show fibre &amp; telecom</label>
     <div class="legend" id="telecomLegend"></div>
-    <p class="note">No public map of Canada's fibre trunk routes exists. OpenStreetMap lines are volunteer-mapped and incomplete. Northwestel and N.W.T. routes are official (N.W.T. government). ISED flags communities with no fibre backbone nearby.</p>
+    <p class="note">No public map of Canada's fibre trunk routes exists. Long-haul fibre largely follows the CN and CP mainlines, so those are shown as a stand-in, not actual fibre. OpenStreetMap telecom lines are mostly Nova Scotia and New Brunswick utility lines. Northwestel and N.W.T. routes are official (N.W.T. government). ISED flags communities with no fibre backbone nearby.</p>
     </div>
   </details>
 
@@ -205,22 +211,33 @@ console.assert(rangeColor(LAYERS[5], '> 100 kW') === RAMP[5] && rangeColor(LAYER
 console.assert(voltColor({ voltage: '500000;230000' }) === VOLT[0][1] && voltColor({ voltage: '27600' }) === VOLT[3][1] && voltColor({}) === VOLT[4][1], 'voltage classes');
 
 // --- map
-const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+// Theme: an explicit choice (theme button, remembered per browser) wins; otherwise follow the system setting
+const systemDark = matchMedia('(prefers-color-scheme: dark)');
+const savedTheme = (() => { try { return localStorage.getItem('theme'); } catch { return null; } })();
+if (savedTheme === 'light' || savedTheme === 'dark') document.documentElement.dataset.theme = savedTheme;
+const isDark = () => (document.documentElement.dataset.theme || (systemDark.matches ? 'dark' : 'light')) === 'dark';
 const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([43.75, -79.45], 12);   // canvas: SVG chokes on ~18k feeder polygons
 L.control.zoom({ position: 'topright' }).addTo(map);
 L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
 // Esri canvas basemap: works from file:// (OSM's tile servers 403 requests without a Referer) and has a dark variant.
 // shortcut: Esri's keyless tile endpoint is fine for personal use; for a public/commercial site, get an ArcGIS key or host tiles.
-const canvas = dark ? 'World_Dark_Gray' : 'World_Light_Gray';
 const esriTile = (name, o = {}) => L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/${name}/MapServer/tile/{z}/{y}/{x}`, { maxNativeZoom: 16, maxZoom: 19, ...o });
 const labels = name => esriTile(name, { pane: 'shadowPane' });   // place labels above the capacity polygons
 const BASEMAPS = {
-  Grey: L.layerGroup([esriTile(`Canvas/${canvas}_Base`, { attribution: 'Basemap © Esri, HERE, Garmin, © OpenStreetMap contributors' }), labels(`Canvas/${canvas}_Reference`)]),
+  Grey: L.layerGroup([esriTile('Canvas/World_Light_Gray_Base', { attribution: 'Basemap © Esri, HERE, Garmin, © OpenStreetMap contributors' }), labels('Canvas/World_Light_Gray_Reference')]),
   Satellite: L.layerGroup([esriTile('World_Imagery', { maxNativeZoom: 18, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' }), labels('Reference/World_Boundaries_and_Places')]),
-  Hillshade: L.layerGroup([esriTile('Elevation/World_Hillshade', { attribution: 'Hillshade © Esri, USGS, NRCan' }), labels(`Canvas/${canvas}_Reference`)]),
+  Hillshade: L.layerGroup([esriTile('Elevation/World_Hillshade', { attribution: 'Hillshade © Esri, USGS, NRCan' }), labels('Canvas/World_Light_Gray_Reference')]),   // hillshade is light in both themes
   Topographic: esriTile('World_Topo_Map', { maxNativeZoom: 18, attribution: 'Basemap © Esri, HERE, Garmin, NRCan, © OpenStreetMap contributors' }),
 };
 BASEMAPS.Grey.addTo(map);
+function applyTheme() {
+  const shade = isDark() ? 'Dark' : 'Light';
+  const [base, ref] = BASEMAPS.Grey.getLayers();
+  base.setUrl(base._url.replace(/World_(Light|Dark)_Gray/, `World_${shade}_Gray`));
+  ref.setUrl(ref._url.replace(/World_(Light|Dark)_Gray/, `World_${shade}_Gray`));
+  $('themeBtn').textContent = isDark() ? '☀ Light' : '☾ Dark';
+  $('themeBtn').setAttribute('aria-label', isDark() ? 'Switch to light mode' : 'Switch to dark mode');
+}
 L.control.layers(BASEMAPS, null, { position: 'topright', collapsed: matchMedia('(max-width: 600px)').matches }).addTo(map);
 map.createPane('osm').style.zIndex = 450;   // power lines above capacity polygons
 
@@ -366,11 +383,11 @@ function gasStyle(t) {
 }
 
 function osmPopup(t) {
-  const kind = (t.kind || t.power || t.man_made || t.pipeline || t.telecom || (t.communication === 'line' && 'telecom line') || t.industrial || 'feature').replace(/_/g, ' ');
+  const kind = (t.kind || (t.railway && 'rail mainline (likely fibre corridor)') || t.power || t.man_made || t.pipeline || t.telecom || (t.communication === 'line' && 'telecom line') || t.industrial || 'feature').replace(/_/g, ' ');
   const v = t.voltage ? t.voltage.split(';').map(x => (parseFloat(x) / 1000) + ' kV').join(' / ') : null;
   return `<div class="pop"><h3>${t.name ? esc(t.name) : kind[0].toUpperCase() + kind.slice(1)}</h3><dl>
     ${row('Type', kind)}${row('Substance', t.substance)}${row('Voltage', v)}${row('Pressure', t.pressure)}${row('Diameter', t.diameter)}
-    ${row('Status', t.status)}${row('Medium', t['telecom:medium'])}${row('Usage', t.usage)}${row('Operator', t.operator)}${row('Circuits', t.circuits)}
+    ${row('Status', t.status)}${row('Medium', t['telecom:medium'])}${row('Usage', t.usage)}${row('Operator', t.operator)}${row('Owner', t.owner)}${row('Circuits', t.circuits)}
     ${row('Source', t['plant:source'])}${row('Output', t['plant:output:electricity'])}${row('Ref', t.ref)}</dl></div>`;
 }
 
@@ -407,17 +424,20 @@ const addGas = infraGroup({ cats: GAS_CATS, catOf: gasCat, style: gasStyle, mast
 
 // --- Fibre & telecom: OpenStreetMap (data/telecom.js), ISED community backbone flags (data/nbd-backbone.js),
 // and live official fibre routes from the N.W.T. government's ArcGIS service. Loaded the first time it's switched on.
-const FIBRE = '#0f8b8d', FIBRE_OFFICIAL = '#1b5e20';
+const FIBRE = '#0f8b8d', FIBRE_OFFICIAL = '#1b5e20', RAIL = '#8d6e63';
 const GNWT = 'https://www.apps.geomatics.gov.nt.ca/arcgis/rest/services/GNWT/UtilitiesCommunication_LCC/MapServer/';
 // popup listing a live layer's own fields, minus ids and CAD export fields
 const attrPopup = (title, l) => `<div class="pop"><h3>${title}</h3><dl>${Object.entries(l.feature.properties)
   .filter(([k, v]) => !/^(OBJECTID|Shape.*|FID.*|sd_.*|Color|Linetype|Elevation|LineWt)$/i.test(k) && v != null && String(v).trim() !== '').map(([k, v]) => row(k, v)).join('')}</dl></div>`;
-const gnwtFibre = (id, title) => L.esri.featureLayer({ url: GNWT + id, pane: 'osm', renderer: osmSvg,
+// explicit attribution: otherwise esri-leaflet shows the service's copyright text, which lists staff names and phone numbers
+const gnwtFibre = (id, title) => L.esri.featureLayer({ url: GNWT + id, pane: 'osm', renderer: osmSvg, attribution: 'Fibre routes: Government of the Northwest Territories',
   style: () => ({ color: FIBRE_OFFICIAL, weight: 3.5 }) }).bindPopup(l => attrPopup(title, l));
 const TELECOM_CATS = [
   { key: 'line', label: 'Telecom / fibre lines (OSM)', swatch: lineSw(FIBRE) },
   { key: 'official', label: 'Northwestel fibre (official)', swatch: lineSw(FIBRE_OFFICIAL) },
   { key: 'nwt', label: 'N.W.T. fibre link (official)', swatch: lineSw(FIBRE_OFFICIAL) },
+  { key: 'rail', label: 'Likely fibre corridors: rail mainlines (stand-in)', swatch: lineSw(RAIL) },
+  { key: 'supernet', label: 'Alberta SuperNet sites, Edmonton region', swatch: dotSw('#1565c0') },
   { key: 'data_center', label: 'Data centres', swatch: boxSw('#6a1b9a') },
   { key: 'exchange', label: 'Telephone exchanges', swatch: dotSw(FIBRE) },
   { key: 'nofibre', label: 'Communities without fibre backbone (ISED)', swatch: dotSw('#d73027') },
@@ -425,13 +445,15 @@ const TELECOM_CATS = [
 ];
 function telecomCat(t) {
   if (t.nbd) return t.nbd;
+  if (t.railway) return 'rail';
   if (t.communication === 'line' || t.telecom === 'line' || t.telecom === 'cable') return 'line';   // exchanges carry communication=yes
   return t.telecom;   // data_center | exchange
 }
-console.assert(telecomCat({ communication: 'line' }) === 'line' && telecomCat({ telecom: 'exchange', communication: 'yes' }) === 'exchange' && telecomCat({ nbd: 'sat' }) === 'sat', 'telecomCat');
+console.assert(telecomCat({ railway: 'rail' }) === 'rail' && telecomCat({ communication: 'line' }) === 'line' && telecomCat({ telecom: 'exchange', communication: 'yes' }) === 'exchange' && telecomCat({ nbd: 'sat' }) === 'sat', 'telecomCat');
 function telecomStyle(t) {
   const c = telecomCat(t);
   if (c === 'line') return { color: FIBRE, weight: 2, dashArray: '1 4', lineCap: 'round' };
+  if (c === 'rail') return { color: RAIL, weight: 2.5, dashArray: '10 5', opacity: 0.85 };
   if (c === 'data_center') return { color: '#6a1b9a', weight: 1.5, fillColor: '#6a1b9a', fillOpacity: 0.5 };
   if (c === 'nofibre') return { color: '#d73027', weight: 2, fillOpacity: 0.5, radius: 4 };
   if (c === 'sat') return { color: '#fc8d59', weight: 2, fillOpacity: 0.5, radius: 4 };
@@ -439,16 +461,23 @@ function telecomStyle(t) {
 }
 const addTelecom = infraGroup({
   cats: TELECOM_CATS, catOf: telecomCat, style: telecomStyle, master: 'showTelecom', legend: 'telecomLegend',
-  extra: { official: gnwtFibre(16, 'Northwestel fibre line'), nwt: gnwtFibre(18, 'N.W.T. fibre optic line') },
-  onFirstShow: () => ['data/telecom.js', 'data/nbd-backbone.js'].forEach(src => {
+  extra: {
+    official: gnwtFibre(16, 'Northwestel fibre line'), nwt: gnwtFibre(18, 'N.W.T. fibre optic line'),
+    // Capital Region Board (Edmonton area) public layer: SuperNet sites only; no public route data exists
+    supernet: L.esri.featureLayer({ url: 'https://services.arcgis.com/LYLybGgpUDJN7hG1/arcgis/rest/services/Broadband_SuperNet_Infrastructure/FeatureServer/0',
+      pane: 'osm', renderer: osmSvg, attribution: 'SuperNet sites: Capital Region Board (Edmonton)',
+      pointToLayer: (f, ll) => L.circleMarker(ll, { pane: 'osm', renderer: osmSvg, radius: 5, color: '#1565c0', weight: 2, fillOpacity: 0.5 }),
+    }).bindPopup(l => attrPopup('Alberta SuperNet site', l)),
+  },
+  onFirstShow: () => ['data/telecom.js', 'data/nbd-backbone.js', 'data/rail-mainlines.js'].forEach(src => {
     const tag = document.createElement('script');
     tag.src = src;
     tag.onerror = () => osmStatus(`Could not load ${src}: run "python fetch_telecom.py" in this folder.`, true);
     document.head.append(tag);
   }),
 });
-document.querySelectorAll('#telecomLegend [data-count="official"], #telecomLegend [data-count="nwt"]').forEach(el => el.textContent = 'live');
-window.TELECOM_LOADED = fc => addTelecom(fc.features);
+document.querySelectorAll('#telecomLegend [data-count="official"], #telecomLegend [data-count="nwt"], #telecomLegend [data-count="supernet"]').forEach(el => el.textContent = 'live');
+window.TELECOM_LOADED = window.RAIL_LOADED = fc => addTelecom(fc.features);
 window.NBD_LOADED = pts => addTelecom(pts.flatMap(([lon, lat, name, nofibre, sat]) => [
   nofibre && { kind: 'community', status: 'No fibre backbone nearby (ISED)', nbd: 'nofibre' },
   sat && { kind: 'community', status: 'Satellite-dependent (ISED)', nbd: 'sat' },
@@ -664,6 +693,15 @@ const syncContours = () => !$('showContours').checked ? contourLayer.remove() : 
 $('showContours').onchange = syncContours;
 $('contourUnit').onchange = () => { fillSteps(); syncContours(); };
 $('contourStep').onchange = syncContours;
+
+$('themeBtn').onclick = () => {
+  const next = isDark() ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('theme', next); } catch {}
+  applyTheme();
+};
+systemDark.addEventListener('change', applyTheme);   // only matters while no explicit choice is set
+applyTheme();
 
 $('toggle').onclick = () => {
   const closed = $('panel').classList.toggle('closed');
