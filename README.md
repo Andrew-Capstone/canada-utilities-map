@@ -28,6 +28,12 @@ For Alberta's gas pipelines (AER Enhanced Pipeline file, ~170 MB download; needs
 python fetch_aer_gas.py
 ```
 
+For BC, Saskatchewan and Ontario gas pipelines (provincial regulators):
+
+```
+python fetch_gas_regulators.py
+```
+
 ## Data and licences
 
 - Capacity: Ontario Energy Board CCIM. Values are indicative; confirm with the local distributor. No reuse licence is stated, so check with the OEB before commercial use.
@@ -35,6 +41,9 @@ python fetch_aer_gas.py
 - Community backbone flags: ISED National Broadband Data, Open Government Licence – Canada.
 - Northwestel / N.W.T. fibre routes: Government of the Northwest Territories ArcGIS service.
 - Alberta gas pipelines: Alberta Energy Regulator Enhanced Pipeline file; informational use, no commercial reproduction.
-- TC Canadian Mainline route: Canada Energy Regulator pipeline map service, personal and non-commercial use only.
+- BC pipelines: BC Energy Regulator permitted pipeline segments (DataBC), Open Government Licence – BC.
+- Saskatchewan gas pipelines and flowlines: Ministry of Energy and Resources, Government of Saskatchewan.
+- Ontario gas pipelines: MNRF Utility Line (Ontario GeoHub), Open Government Licence – Ontario.
+- TC Canadian Mainline and other federal gas systems: Canada Energy Regulator pipeline map service, personal and non-commercial use only.
 - Basemaps: Esri Light/Dark Gray Canvas, World Imagery (satellite), World Hillshade and World Topographic.
 - Contour lines: generated in the browser from AWS Terrain Tiles (NRCan CDEM, SRTM), accurate to a few metres.
