@@ -867,7 +867,8 @@ async function siteReport(o, title) {
   siteLatLng = o; writeHash();
   if (map.getZoom() < 9) map.setView(o, 11, { animate: false });
   siteMarker?.remove();
-  const marker = siteMarker = L.circleMarker(o, { pane: 'measure', radius: 8, color: '#ffffff', weight: 3, fillColor: '#0b6e99', fillOpacity: 1 }).addTo(map)
+  // SVG renderer, not the default canvas: a canvas in this top pane would cover the whole map and swallow every click
+  const marker = siteMarker = L.circleMarker(o, { pane: 'measure', renderer: measureSvg, radius: 8, color: '#ffffff', weight: 3, fillColor: '#0b6e99', fillOpacity: 1 }).addTo(map)
     .bindPopup('<div class="pop report">Checking this site…</div>', { maxWidth: 380 }).openPopup();
   marker.on('popupclose', () => { if (marker._reportDone && siteMarker === marker) { marker.remove(); siteMarker = null; siteLatLng = null; writeHash(); } });
 
