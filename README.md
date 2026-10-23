@@ -20,7 +20,7 @@ python fetch_infrastructure.py
 
 This rewrites `data/CA-XX.js` (one file per province/territory) and `data/index.js` from OpenStreetMap. To refresh only some, list their codes, e.g. `python fetch_infrastructure.py CA-AB CA-BC`. The capacity data is always live and needs no refresh.
 
-For the fibre & telecom data (OpenStreetMap telecom and mainline railways, ISED National Broadband Data):
+For the fibre & telecom data (OpenStreetMap telecom and mainline railways, ISED National Broadband Data, PeeringDB data centres; `python fetch_telecom.py peeringdb` refreshes just the data centres):
 
 ```
 python fetch_telecom.py
@@ -43,6 +43,7 @@ python fetch_gas_regulators.py
 - Capacity: Ontario Energy Board CCIM. Values are indicative; confirm with the local distributor. No reuse licence is stated, so check with the OEB before commercial use.
 - Infrastructure and telecom: © OpenStreetMap contributors, ODbL.
 - Community backbone flags: ISED National Broadband Data, Open Government Licence – Canada.
+- Data centres: PeeringDB facility records (operator-maintained), merged with OpenStreetMap data centres.
 - Northwestel / N.W.T. fibre routes: Government of the Northwest Territories ArcGIS service.
 - Alberta gas pipelines: Alberta Energy Regulator Enhanced Pipeline file; informational use, no commercial reproduction.
 - BC pipelines: BC Energy Regulator permitted pipeline segments (DataBC), Open Government Licence – BC.

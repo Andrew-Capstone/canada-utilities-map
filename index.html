@@ -422,7 +422,9 @@ function osmPopup(t) {
   return `<div class="pop"><h3>${t.name ? esc(t.name) : kind[0].toUpperCase() + kind.slice(1)}</h3><dl>
     ${row('Type', kind)}${row('Substance', t.substance)}${row('Voltage', v)}${row('Pressure', t.pressure)}${row('Diameter', t.diameter)}
     ${row('Status', t.status)}${row('Medium', t['telecom:medium'])}${row('Usage', t.usage)}${row('Operator', t.operator)}${row('Owner', t.owner)}${row('Circuits', t.circuits)}
-    ${row('Source', t['plant:source'])}${row('Output', t['plant:output:electricity'])}${row('Ref', t.ref)}</dl></div>`;
+    ${row('Source', t['plant:source'])}${row('Output', t['plant:output:electricity'])}${row('Ref', t.ref)}
+    ${row('Address', t.address)}${row('Networks on site', t.nets)}${row('Power available', t.power_services)}${row('Data from', t.dsource)}</dl>
+    ${/^https?:\/\//.test(t.website || '') ? `<a href="${esc(t.website)}" target="_blank" rel="noopener">Operator's page</a>` : ''}</div>`;
 }
 
 // One Leaflet layer per category (legend checkboxes add/remove them); province data is added as it loads.
@@ -535,7 +537,7 @@ const TELECOM_CATS = [
   { key: 'nwt', label: 'N.W.T. fibre link (official)', swatch: lineSw(FIBRE_OFFICIAL) },
   { key: 'rail', label: 'Likely fibre corridors: rail mainlines (stand-in)', swatch: lineSw(RAIL) },
   { key: 'supernet', label: 'Alberta SuperNet sites, Edmonton region', swatch: dotSw('#1565c0') },
-  { key: 'data_center', label: 'Data centres', swatch: boxSw('#6a1b9a') },
+  { key: 'data_center', label: 'Data centres (PeeringDB + OSM)', swatch: boxSw('#6a1b9a') },
   { key: 'exchange', label: 'Telephone exchanges', swatch: dotSw(FIBRE), off: true },
   { key: 'nofibre', label: 'Communities without fibre backbone (ISED)', swatch: dotSw('#d73027'), off: true },
   { key: 'sat', label: 'Satellite-dependent communities (ISED)', swatch: dotSw('#fc8d59'), off: true },
@@ -557,8 +559,11 @@ function telecomStyle(t) {
   return { color: FIBRE, weight: 2, fillOpacity: 0.3, radius: 3 };
 }
 let telecomReady = null;
-const loadTelecomData = () => telecomReady ??= Promise.allSettled(['data/telecom.js', 'data/nbd-backbone.js', 'data/rail-mainlines.js']
-  .map(src => loadScript(src, () => osmStatus(`Could not load ${src}: run "python fetch_telecom.py" in this folder.`, true))));
+const loadTelecomData = () => telecomReady ??= Promise.allSettled([
+  ...['data/telecom.js', 'data/nbd-backbone.js', 'data/rail-mainlines.js']
+    .map(src => loadScript(src, () => osmStatus(`Could not load ${src}: run "python fetch_telecom.py" in this folder.`, true))),
+  loadScript('data/datacentres-peeringdb.js', () => { pdbDC = []; mergeDataCentres(); }),   // optional: OSM data centres still show without it
+]);
 const addTelecom = infraGroup({
   cats: TELECOM_CATS, catOf: telecomCat, style: telecomStyle, master: 'showTelecom', legend: 'telecomLegend',
   extra: {
@@ -572,7 +577,32 @@ const addTelecom = infraGroup({
   onFirstShow: () => loadTelecomData(),
 });
 document.querySelectorAll('#telecomLegend [data-count="official"], #telecomLegend [data-count="nwt"], #telecomLegend [data-count="supernet"]').forEach(el => el.textContent = 'live');
-window.TELECOM_LOADED = window.RAIL_LOADED = fc => addTelecom(fc.features);
+window.RAIL_LOADED = fc => addTelecom(fc.features);
+// Data centres: PeeringDB (operator-maintained) merged with OpenStreetMap; an OSM point within 300 m of a
+// PeeringDB facility is treated as the same building. Both files load asynchronously, so merge once both are in.
+let osmDC = null, pdbDC = null;
+window.TELECOM_LOADED = fc => {
+  osmDC = fc.features.filter(f => f.properties.telecom === 'data_center').map(f => ({ ...f, properties: { ...f.properties, dsource: 'OpenStreetMap' } }));
+  addTelecom(fc.features.filter(f => f.properties.telecom !== 'data_center'));
+  mergeDataCentres();
+};
+window.PDB_LOADED = pts => {
+  pdbDC = pts.map(([lat, lon, name, operator, address, website, nets, power]) => ({ type: 'Feature',
+    properties: { telecom: 'data_center', name, operator, address, website, nets: nets || null, power_services: power, dsource: 'PeeringDB' },
+    geometry: { type: 'Point', coordinates: [lon, lat] } }));
+  mergeDataCentres();
+};
+function dedupeDataCentres(osm, pdb, metres = 300) {
+  const pdbLL = pdb.map(f => L.latLng(f.geometry.coordinates[1], f.geometry.coordinates[0]));
+  const at = f => { const c = f.geometry.type === 'Point' ? f.geometry.coordinates : f.geometry.coordinates.flat(Infinity).slice(0, 2); return L.latLng(c[1], c[0]); };
+  return [...pdb, ...osm.filter(f => !pdbLL.some(p => Math.hypot(...toXY(p, at(f))) < metres))];
+}
+function mergeDataCentres() {
+  if (!osmDC || !pdbDC) return;
+  addTelecom(dedupeDataCentres(osmDC, pdbDC));
+  osmDC = pdbDC = [];   // added once
+}
+
 window.NBD_LOADED = pts => addTelecom(pts.flatMap(([lon, lat, name, nofibre, sat]) => [
   nofibre && { kind: 'community', status: 'No fibre backbone nearby (ISED)', nbd: 'nofibre' },
   sat && { kind: 'community', status: 'Satellite-dependent (ISED)', nbd: 'sat' },

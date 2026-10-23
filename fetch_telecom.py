@@ -5,15 +5,19 @@
                          satellite-dependent communities (Open Government Licence - Canada)
 - data/rail-mainlines.js OpenStreetMap mainline railways, shown as a stand-in for long-haul fibre corridors
                          (no public route data exists for Canada's carrier backbones)
+- data/datacentres-peeringdb.js  PeeringDB colocation/interconnection facilities in Canada (operator-maintained);
+                         the map merges them with OpenStreetMap's data centres
 
-Run:  python fetch_telecom.py                 (all three)
-      python fetch_telecom.py rail telecom    (only these steps: nbd, telecom, rail)
+Run:  python fetch_telecom.py                 (all four)
+      python fetch_telecom.py rail telecom    (only these steps: nbd, telecom, rail, peeringdb)
 """
 import csv
 import io
 import json
 import os
 import sys
+import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -29,6 +33,7 @@ RAIL_QUERY = """[out:json][timeout:600];
 area["ISO3166-1"="CA"][admin_level=2]->.c;
 way["railway"="rail"]["usage"="main"][!"service"](area.c);
 out geom tags;"""
+PEERINGDB = "https://www.peeringdb.com/api/fac?country=CA"
 NBD_ZIP = "https://ised-isde.canada.ca/app/scr/sittibc/web/api/openData/Map_Data_CSV.zip"
 NBD_CSV = "Data_Com_Points_Col_Données.csv"
 
@@ -50,6 +55,19 @@ def nbd_points(rows):
     return out
 
 
+def pdb_points(facs):
+    """[lat, lon, name, operator, address, website, networks, power] for active facilities with coordinates."""
+    out = []
+    for f in facs:
+        if f.get("status") != "ok" or not (f.get("latitude") and f.get("longitude")):
+            continue
+        addr = ", ".join(x for x in (f.get("address1"), f.get("city"), f.get("state")) if x)
+        power = ", ".join(f.get("available_voltage_services") or [])
+        out.append([round(f["latitude"], 5), round(f["longitude"], 5), f["name"], f.get("org_name"), addr,
+                    f.get("website") or None, f.get("net_count") or 0, power or None])
+    return out
+
+
 def simplify(pts, tol):
     """Ramer-Douglas-Peucker on [lon, lat] points; tol in degrees."""
     if len(pts) < 3:
@@ -67,7 +85,9 @@ def simplify(pts, tol):
 if __name__ == "__main__":
     assert simplify([[0, 0], [1, 0.0001], [2, 0]], 0.001) == [[0, 0], [2, 0]]
     assert simplify([[0, 0], [1, 1], [2, 0]], 0.001) == [[0, 0], [1, 1], [2, 0]]
-    steps = sys.argv[1:] or ["nbd", "telecom", "rail"]
+    assert pdb_points([{"status": "ok", "latitude": 43.6, "longitude": -79.4, "name": "A", "address1": "1 St", "city": "T", "state": "ON",
+                        "available_voltage_services": ["120 VAC"], "net_count": 3}, {"status": "ok", "latitude": None}]) ==         [[43.6, -79.4, "A", None, "1 St, T, ON", None, 3, "120 VAC"]]
+    steps = sys.argv[1:] or ["nbd", "telecom", "rail", "peeringdb"]
     sample = [{"wo_backbone_fibre_sans_fibre_dorsale": "1", "satellite_dep": "0", "Longitude": "-66.123456", "Latitude": "46.5", "Name_en": "A"},
               {"wo_backbone_fibre_sans_fibre_dorsale": "0", "satellite_dep": "0", "Longitude": "0", "Latitude": "0", "Name_en": "B"}]
     assert nbd_points(sample) == [[-66.12346, 46.5, "A", 1, 0]]
@@ -100,3 +120,18 @@ if __name__ == "__main__":
                 f["geometry"]["coordinates"] = [[round(x, 4), round(y, 4)] for x, y in simplify(f["geometry"]["coordinates"], 0.0005)]
         write_js("rail-mainlines.js", "RAIL_LOADED", fc)
         print(f"OpenStreetMap mainline railways: {len(fc['features']):,} segments")
+
+    if "peeringdb" in steps:
+        req = urllib.request.Request(PEERINGDB, headers={"User-Agent": "canada-utilities-map/1.0"})
+        for attempt in range(6):   # anonymous API is rate-limited (HTTP 429): back off and retry
+            try:
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    pts = pdb_points(json.load(r)["data"])
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429 or attempt == 5:
+                    raise
+                print(f"  PeeringDB busy (429), waiting {60 * (attempt + 1)} s", flush=True)
+                time.sleep(60 * (attempt + 1))
+        write_js("datacentres-peeringdb.js", "PDB_LOADED", pts)
+        print(f"PeeringDB: {len(pts):,} facilities")
