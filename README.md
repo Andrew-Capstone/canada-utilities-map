@@ -8,6 +8,10 @@ One map combining:
 
 Open `index.html` (or the published GitHub Pages link). Tick or untick legend rows to filter capacity ranges, voltage classes and gas facility types.
 
+- **Search** an address or place (Esri World Geocoder); picking a result opens a site report for it.
+- **Check a site:** click the button, then the map, for the nearest substation, power line, gas line, rail corridor, data centre and exchange, plus Ontario capacity at that point.
+- **Copy link:** the address bar keeps the view, basemap, layers and any site report, so a copied link reopens exactly what you see.
+
 ## Refresh the infrastructure data
 
 ```

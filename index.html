@@ -56,6 +56,19 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .foot a { color: var(--accent); }
 #toggle { display: none; }
 .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.search { display: flex; gap: 6px; }
+.search input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--fg); }
+.results { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 4px; }
+.results button { display: block; width: 100%; text-align: left; font: inherit; font-size: 13px; padding: 6px 8px; border: 0; background: none; color: var(--fg); cursor: pointer; }
+.results li + li button { border-top: 1px solid var(--line); }
+.results button:hover, .results button:focus-visible { background: var(--bg); }
+#siteBtn { align-self: flex-start; }
+.report { min-width: 260px; }
+.report h4 { font: 600 11px/1 var(--font-body); letter-spacing: .06em; text-transform: uppercase; color: #5d6b78; margin: 10px 0 4px; }
+.report table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.report td { padding: 2px 0; vertical-align: top; }
+.report td:last-child { text-align: right; white-space: nowrap; padding-left: 10px; font-family: var(--font-data); }
+.report .muted { color: #5d6b78; font-size: 12px; }
 #themeBtn { padding: 3px 8px; font-size: 12px; white-space: nowrap; }
 .btns { display: flex; gap: 6px; flex-wrap: wrap; }
 .btn { font: inherit; padding: 5px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--fg); cursor: pointer; }
@@ -89,10 +102,18 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   <div class="head">
     <h1>Canada Utilities Map</h1>
     <div class="btns">
+      <button class="btn" id="linkBtn" type="button" title="Copy a link to this exact view">Copy link</button>
       <button class="btn" id="themeBtn" type="button"></button>
       <button id="toggle" type="button" aria-expanded="true">Hide</button>
     </div>
   </div>
+
+  <form class="search" id="searchForm" role="search">
+    <input id="searchInput" type="search" placeholder="Search an address or place" aria-label="Search an address or place" autocomplete="off">
+    <button class="btn" type="submit">Go</button>
+  </form>
+  <ul class="results" id="searchResults" hidden></ul>
+  <button class="btn" id="siteBtn" type="button" aria-pressed="false">Check a site</button>
 
   <details class="sec">
     <summary>Measure</summary>
@@ -421,7 +442,7 @@ function infraGroup({ cats, catOf, style, master, legend, extra = {}, onFirstSho
   }
   $(master).onchange = sync;
   sync();
-  return features => {
+  const add = features => {
     const byCat = Object.fromEntries(cats.map(c => [c.key, []]));
     for (const f of features) { const k = catOf(f.properties); if (k in byCat) byCat[k].push(f); }
     for (const c of cats) {
@@ -431,6 +452,8 @@ function infraGroup({ cats, catOf, style, master, legend, extra = {}, onFirstSho
       $(legend).querySelector(`[data-count="${c.key}"]`).textContent = counts[c.key].toLocaleString();
     }
   };
+  add.layers = layers;   // read by the site report
+  return add;
 }
 const addPower = infraGroup({ cats: POWER_CATS, catOf: powerCat, style: powerStyle, master: 'showOsm', legend: 'osmLegend' });
 // TC Canadian Mainline route, live from the Canada Energy Regulator's pipeline map service (personal, non-commercial use only)
@@ -470,14 +493,17 @@ const gasCount = (k, text) => $('gasLegend').querySelector(`[data-count="${k}"]`
 ['sk_pipe', 'sk_flow'].forEach(k => gasCount(k, 'loads in SK')); gasCount('on_mnrf', 'loads in ON');
 gasCount('aersmall', 'tick to load');
 
-const loadScript = (src, onerror) => { const tag = document.createElement('script'); tag.src = src; tag.onerror = onerror; document.head.append(tag); };
+const loadScript = (src, onerror) => new Promise((resolve, reject) => {
+  const tag = document.createElement('script'); tag.src = src; tag.onload = resolve;
+  tag.onerror = e => { onerror?.(); reject(e); };
+  document.head.append(tag);
+});
 const REG_FILES = { 'CA-AB': ['aer-gas-main.js'], 'CA-BC': ['gas-bc.js'], 'CA-SK': ['gas-sk.js', 'gas-sk-flow.js'], 'CA-ON': ['gas-on.js'] };   // load with the province
 const TICK_FILES = { aersmall: 'aer-gas-small.js' };   // 67k lines: load only when its row is ticked
-const gasRequested = new Set();
+const gasRequested = new Map();   // file -> Promise
 function loadGasFile(file) {
-  if (gasRequested.has(file)) return;
-  gasRequested.add(file);
-  loadScript(`data/${file}`, () => { gasRequested.delete(file); osmStatus(`Could not load data/${file}: run "python fetch_aer_gas.py" or "python fetch_gas_regulators.py".`, true); });
+  if (!gasRequested.has(file)) gasRequested.set(file, loadScript(`data/${file}`, () => { gasRequested.delete(file); osmStatus(`Could not load data/${file}: run "python fetch_aer_gas.py" or "python fetch_gas_regulators.py".`, true); }).catch(() => {}));
+  return gasRequested.get(file);
 }
 $('gasLegend').addEventListener('change', () => {
   for (const [k, file] of Object.entries(TICK_FILES)) if ($('gasLegend').querySelector(`[data-key="${k}"]`).checked) loadGasFile(file);
@@ -486,7 +512,8 @@ window.GAS_LOADED = window.AER_LOADED = d => {   // AER files predate the generi
   const counts = {}, src = d.source || 'Alberta Energy Regulator';
   for (const [pts, op, diam, maop, gas, lic, grp] of d.f) {
     const [k, color, weight] = regStyle(grp, diam);
-    L.polyline(pts, { color, weight, opacity: 0.85 }).bindPopup(() => regPopup(src, d.ops[op], diam, maop, gas, lic)).addTo(regGroups[k]);
+    const line = L.polyline(pts, { color, weight, opacity: 0.85 }).bindPopup(() => regPopup(src, d.ops[op], diam, maop, gas, lic)).addTo(regGroups[k]);
+    line.info = { op: d.ops[op], diam, gas, src };
     counts[k] = (counts[k] || 0) + 1;
   }
   for (const [k, n] of Object.entries(counts)) gasCount(k, n.toLocaleString());
@@ -529,6 +556,9 @@ function telecomStyle(t) {
   if (c === 'sat') return { color: '#fc8d59', weight: 2, fillOpacity: 0.5, radius: 4 };
   return { color: FIBRE, weight: 2, fillOpacity: 0.3, radius: 3 };
 }
+let telecomReady = null;
+const loadTelecomData = () => telecomReady ??= Promise.allSettled(['data/telecom.js', 'data/nbd-backbone.js', 'data/rail-mainlines.js']
+  .map(src => loadScript(src, () => osmStatus(`Could not load ${src}: run "python fetch_telecom.py" in this folder.`, true))));
 const addTelecom = infraGroup({
   cats: TELECOM_CATS, catOf: telecomCat, style: telecomStyle, master: 'showTelecom', legend: 'telecomLegend',
   extra: {
@@ -539,12 +569,7 @@ const addTelecom = infraGroup({
       pointToLayer: (f, ll) => L.circleMarker(ll, { pane: 'osm', renderer: osmSvg, radius: 5, color: '#1565c0', weight: 2, fillOpacity: 0.5 }),
     }).bindPopup(l => attrPopup('Alberta SuperNet site', l)),
   },
-  onFirstShow: () => ['data/telecom.js', 'data/nbd-backbone.js', 'data/rail-mainlines.js'].forEach(src => {
-    const tag = document.createElement('script');
-    tag.src = src;
-    tag.onerror = () => osmStatus(`Could not load ${src}: run "python fetch_telecom.py" in this folder.`, true);
-    document.head.append(tag);
-  }),
+  onFirstShow: () => loadTelecomData(),
 });
 document.querySelectorAll('#telecomLegend [data-count="official"], #telecomLegend [data-count="nwt"], #telecomLegend [data-count="supernet"]').forEach(el => el.textContent = 'live');
 window.TELECOM_LOADED = window.RAIL_LOADED = fc => addTelecom(fc.features);
@@ -580,10 +605,7 @@ function loadVisibleProvinces() {
   if (map.getZoom() >= LOAD_ZOOM) for (const [code, p] of Object.entries(provinces)) {
     if (p.state !== 'idle' || !p.bounds.intersects(map.getBounds())) continue;
     p.state = 'loading';
-    const tag = document.createElement('script');
-    tag.src = `data/${code}.js`;
-    tag.onerror = () => { p.state = 'idle'; osmStatus(`Could not load ${p.name} data (data/${code}.js).`, true); };
-    document.head.append(tag);
+    p.ready = loadScript(`data/${code}.js`, () => { p.state = 'idle'; osmStatus(`Could not load ${p.name} data (data/${code}.js).`, true); }).catch(() => {});
   }
   infraStatus();
 }
@@ -781,6 +803,195 @@ $('toggle').onclick = () => {
 };
 
 buildCcim();
+
+// --- Site report: nearest power, gas and telecom features to a point, from the data the map has loaded
+const M_LAT = 110574, M_LON = 111320;   // metres per degree (local equirectangular approximation, fine at site scale)
+function toXY(ll, o) { return [(ll.lng - o.lng) * Math.cos(o.lat * Math.PI / 180) * M_LON, (ll.lat - o.lat) * M_LAT]; }
+function segDist([x1, y1], [x2, y2]) {   // distance from the origin to segment p1-p2
+  const dx = x2 - x1, dy = y2 - y1, t = Math.max(0, Math.min(1, -(x1 * dx + y1 * dy) / (dx * dx + dy * dy || 1)));
+  return Math.hypot(x1 + t * dx, y1 + t * dy);
+}
+function distTo(o, layer) {   // metres from point o to a marker, line or polygon (its outline)
+  if (layer.getLatLng) return Math.hypot(...toXY(layer.getLatLng(), o));
+  let best = Infinity;
+  const walk = a => {
+    if (!a.length) return;
+    if (!(a[0] instanceof L.LatLng)) return a.forEach(walk);
+    let prev = toXY(a[0], o); best = Math.min(best, Math.hypot(...prev));
+    for (let i = 1; i < a.length; i++) { const cur = toXY(a[i], o); best = Math.min(best, segDist(prev, cur)); prev = cur; }
+  };
+  walk(layer.getLatLngs());
+  return best;
+}
+function boxDist(o, b) {   // lower bound: metres from o to a bounding box
+  const c = L.latLng(Math.max(b.getSouth(), Math.min(o.lat, b.getNorth())), Math.max(b.getWest(), Math.min(o.lng, b.getEast())));
+  return Math.hypot(...toXY(c, o));
+}
+const leaves = l => {   // flatten groups; live Esri layers keep their features behind eachFeature()
+  if (l.eachFeature) { const out = []; l.eachFeature(f => out.push(f)); return out; }
+  return l.getLayers ? l.getLayers().flatMap(leaves) : [l];
+};
+function nearest(o, groups, maxM = 250000) {
+  let best = null, bestD = maxM;
+  for (const g of groups) if (g) for (const leaf of leaves(g)) {
+    if (leaf.getBounds && boxDist(o, leaf.getBounds()) >= bestD) continue;
+    const d = distTo(o, leaf);
+    if (d < bestD) { bestD = d; best = leaf; }
+  }
+  return best && { layer: best, d: bestD };
+}
+{ // self-check: a line 1 km north of the point, and a point 1 km east
+  const o = L.latLng(50, -105), line = L.polyline([[50 + 1000 / M_LAT, -105.1], [50 + 1000 / M_LAT, -104.9]]);
+  console.assert(Math.abs(distTo(o, line) - 1000) < 1, 'distTo line');
+  console.assert(Math.abs(distTo(o, L.circleMarker([50, -105 + 1000 / (M_LON * Math.cos(50 * Math.PI / 180))])) - 1000) < 1, 'distTo point');
+  console.assert(nearest(o, [L.layerGroup([line])]).layer === line, 'nearest');
+}
+
+const kv = v => v && String(v).split(';').map(x => parseFloat(x) / 1000).filter(x => x > 0).map(x => `${x} kV`).join(' / ');
+function describeHit(leaf) {
+  if (leaf.info) { const i = leaf.info; return [i.op, i.diam && `${i.diam} mm`, GAS_TYPE[i.gas], i.src].filter(Boolean).join(' · '); }
+  const p = leaf.feature?.properties || {};
+  return [p.name || p.Pipeline_Name, kv(p.voltage), p.operator || p.Company, p.usage === 'transmission' && 'transmission'].filter(Boolean).join(' · ') || 'Unnamed';
+}
+const distText = d => fmt(d, lenU());
+const pick = (layers, keys) => keys.map(k => layers[k]);
+// CER systems are live layers that only hold what's in view, so ask the CER service for lines near the point
+const cerNearby = o => new Promise(res => L.esri.query({ url: 'https://services5.arcgis.com/vNzamREXvX2WcX6d/ArcGIS/rest/services/CER_Pipeline_Systems_WGS84_view/FeatureServer/3' })
+  .where("Commodity = 'Gas'").nearby(o, 150000).run((err, fc) => res(err ? null : L.geoJSON(fc))));
+const capacityAt = (o, id) => new Promise(res => L.esri.query({ url: SVC + 'FeatureServer/' + id }).intersects(o)
+  .run((err, fc) => res(err ? null : fc?.features?.[0]?.properties || null)));
+const withTimeout = (p, ms) => Promise.race([p, new Promise(r => setTimeout(r, ms))]);
+
+let siteMarker = null, siteLatLng = null;
+async function siteReport(o, title) {
+  siteLatLng = o; writeHash();
+  if (map.getZoom() < 9) map.setView(o, 11, { animate: false });
+  siteMarker?.remove();
+  const marker = siteMarker = L.circleMarker(o, { pane: 'measure', radius: 8, color: '#ffffff', weight: 3, fillColor: '#0b6e99', fillOpacity: 1 }).addTo(map)
+    .bindPopup('<div class="pop report">Checking this site…</div>', { maxWidth: 380 }).openPopup();
+  marker.on('popupclose', () => { if (marker._reportDone && siteMarker === marker) { marker.remove(); siteMarker = null; siteLatLng = null; writeHash(); } });
+
+  loadVisibleProvinces();
+  const here = Object.entries(provinces).filter(([, p]) => p.bounds.contains(o));
+  await withTimeout(Promise.allSettled(here.map(([, p]) => p.ready)), 30000);
+  await withTimeout(Promise.allSettled(here.flatMap(([code]) => (REG_FILES[code] || []).map(loadGasFile))), 30000);
+  const [cer, cap, der] = await Promise.all([withTimeout(cerNearby(o), 15000), capacityAt(o, 0), capacityAt(o, 2), withTimeout(loadTelecomData(), 30000)]);
+  if (siteMarker !== marker) return;   // a newer report replaced this one
+
+  const row3 = (label, hit) => `<tr><td>${label}</td><td>${hit ? esc(describeHit(hit.layer)) : '<span class="muted">none within 250 km</span>'}</td><td>${hit ? distText(hit.d) : ''}</td></tr>`;
+  const power = addPower.layers, gas = addGas.layers, tel = addTelecom.layers;
+  const gasMain = [...pick(gas, ['tcmainline', 'aer16', 'aer8', 'bc_trans', 'sk_pipe', 'on_mnrf', 'transmission']), cer];
+  const gasAny = [...gasMain, ...pick(gas, ['aer4', 'aersmall', 'bc_other', 'sk_flow', 'pipeline'])];
+  const capRow = (label, c, unit = '') => c ? `<tr><td>${label}</td><td>${c.capacityrange ? esc(c.capacityrange + unit) : 'Not reported'}${c.capacity != null ? ` (exact ${c.capacity} MW)` : ''} · ${esc(c.ldc_name || c.idldc || '')}</td><td></td></tr>` : '';
+  marker.setPopupContent(`<div class="pop report"><h3>${esc(title || `Site ${o.lat.toFixed(5)}, ${o.lng.toFixed(5)}`)}</h3>
+    <h4>Power</h4><table>
+      ${row3('Substation', nearest(o, [power.substation]))}
+      ${row3('Line 115 kV+', nearest(o, pick(power, ['v0', 'v1', 'v2'])))}
+      ${row3('Any power line', nearest(o, pick(power, ['v0', 'v1', 'v2', 'v3', 'v4'])))}
+      ${capRow('Load capacity (OEB)', cap, ' MW')}${capRow('DER hosting, inverter exporting (OEB)', der)}</table>
+    <h4>Gas</h4><table>
+      ${row3('Transmission line', nearest(o, gasMain))}
+      ${row3('Any gas line', nearest(o, gasAny))}</table>
+    <h4>Telecom</h4><table>
+      ${row3('Rail mainline (fibre corridor)', nearest(o, [tel.rail]))}
+      ${row3('Official fibre route', nearest(o, [tel.official, tel.nwt]))}
+      ${row3('Data centre', nearest(o, [tel.data_center]))}
+      ${row3('Telephone exchange', nearest(o, [tel.exchange]))}</table>
+    <p class="muted">Straight-line distances from loaded map data, for screening only. Capacity covers Ontario only. Change units under Measure.</p></div>`).openPopup();
+  marker._reportDone = true;
+}
+
+let siteMode = false;
+function setSiteMode(on) {
+  siteMode = on;
+  $('siteBtn').setAttribute('aria-pressed', String(on));
+  $('siteBtn').textContent = on ? 'Click the map…' : 'Check a site';
+  map.getContainer().classList.toggle('measuring', on || !!draft);   // reuse the measuring click-through
+}
+$('siteBtn').onclick = () => { if (draft) cancelMeasure(); setSiteMode(!siteMode); };
+map.on('click', e => { if (siteMode && !draft) { setSiteMode(false); siteReport(e.latlng); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && siteMode) setSiteMode(false); });
+
+// --- Address / place search (Esri World Geocoder, keyless for searches that aren't stored)
+const GEOCODE = 'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates';
+$('searchForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const text = $('searchInput').value.trim(), list = $('searchResults');
+  if (!text) return;
+  list.hidden = false; list.innerHTML = '<li><button type="button" disabled>Searching…</button></li>';
+  try {
+    const q = new URLSearchParams({ SingleLine: text, countryCode: 'CAN', maxLocations: 5, outFields: 'Match_addr,Addr_type', f: 'json' });
+    const { candidates = [] } = await (await fetch(`${GEOCODE}?${q}`)).json();
+    if (!candidates.length) { list.innerHTML = '<li><button type="button" disabled>No matches in Canada. Try a town name or full address.</button></li>'; return; }
+    list.innerHTML = candidates.map((c, i) => `<li><button type="button" data-i="${i}">${esc(c.attributes.Match_addr)}</button></li>`).join('');
+    list.onclick = ev => {
+      const c = candidates[ev.target.closest('button')?.dataset.i];
+      if (!c) return;
+      list.hidden = true;
+      const x = c.extent, o = L.latLng(c.location.y, c.location.x);
+      if (x) map.fitBounds([[x.ymin, x.xmin], [x.ymax, x.xmax]], { maxZoom: 15, animate: false }); else map.setView(o, 14, { animate: false });
+      siteReport(o, c.attributes.Match_addr);
+    };
+  } catch {
+    list.innerHTML = '<li><button type="button" disabled>Search is unavailable right now. Check your connection and try again.</button></li>';
+  }
+});
+
+// --- Shareable link: the address bar's #hash holds the view, basemap, layer choices and any site report
+const LEGENDS = ['ccimLegend', 'osmLegend', 'gasLegend', 'telecomLegend'];
+const MASTERS = ['showCcim', 'showContours', 'showOsm', 'showGas', 'showTelecom'];
+let restoring = true, hashTimer = null;
+function stateHash() {
+  const c = map.getCenter(), q = new URLSearchParams();
+  q.set('map', `${map.getZoom()}/${c.lat.toFixed(4)}/${c.lng.toFixed(4)}`);
+  const base = Object.entries(BASEMAPS).find(([, l]) => map.hasLayer(l));
+  if (base && base[0] !== 'Grey') q.set('base', base[0]);
+  if (current.id !== 0) q.set('cap', current.id);
+  q.set('on', MASTERS.filter(id => $(id).checked).join(','));
+  for (const id of LEGENDS) q.set(id.replace('Legend', ''), checkedKeys($(id)).join(','));
+  if ($('showContours').checked) q.set('contour', `${$('contourStep').value}${$('contourUnit').value}`);
+  if (siteLatLng) q.set('site', `${siteLatLng.lat.toFixed(5)},${siteLatLng.lng.toFixed(5)}`);
+  return '#' + q.toString().replace(/%2C/g, ',').replace(/%2F/g, '/');   // keep commas and slashes readable
+}
+function writeHash() {
+  if (restoring) return;
+  clearTimeout(hashTimer);
+  hashTimer = setTimeout(() => history.replaceState(null, '', stateHash()), 300);
+}
+function restoreState() {
+  const q = new URLSearchParams(location.hash.slice(1));
+  if (!q.has('map')) return;   // plain link: keep the default Canada-wide view
+  const base = BASEMAPS[q.get('base')] || BASEMAPS.Grey;
+  Object.values(BASEMAPS).forEach(l => l !== base && map.removeLayer(l));
+  base.addTo(map);
+  if (q.has('cap') && LAYERS.some(l => l.id == q.get('cap'))) { $('ccimLayer').value = q.get('cap'); $('ccimLayer').dispatchEvent(new Event('change')); }
+  for (const id of LEGENDS) {
+    const key = id.replace('Legend', '');
+    if (!q.has(key)) continue;
+    const keys = new Set(q.get(key).split(','));
+    $(id).querySelectorAll('input').forEach(i => i.checked = keys.has(i.dataset.key));
+  }
+  const cm = /^(\d+)(m|ft)$/.exec(q.get('contour') || '');
+  if (cm) { $('contourUnit').value = cm[2]; fillSteps(); $('contourStep').value = cm[1]; }
+  const on = new Set((q.get('on') || '').split(','));
+  for (const id of MASTERS) { $(id).checked = on.has(id); $(id).dispatchEvent(new Event('change')); }
+  for (const id of LEGENDS) $(id).dispatchEvent(new Event('change'));
+  const [z, lat, lng] = q.get('map').split('/').map(Number);
+  if ([z, lat, lng].every(Number.isFinite)) map.setView([lat, lng], z, { animate: false });
+  const site = (q.get('site') || '').split(',').map(Number);
+  if (site.length === 2 && site.every(Number.isFinite)) setTimeout(() => siteReport(L.latLng(site[0], site[1])), 0);
+}
+restoreState();
+restoring = false;
+map.on('moveend baselayerchange', writeHash);
+$('panel').addEventListener('change', writeHash);
+
+$('linkBtn').onclick = async () => {
+  history.replaceState(null, '', stateHash());
+  try { await navigator.clipboard.writeText(location.href); $('linkBtn').textContent = 'Copied'; }
+  catch { window.prompt('Copy this link:', location.href); }
+  setTimeout(() => $('linkBtn').textContent = 'Copy link', 2000);
+};
 </script>
 </body>
 </html>
