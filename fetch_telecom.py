@@ -6,10 +6,12 @@
 - data/rail-mainlines.js OpenStreetMap mainline railways, shown as a stand-in for long-haul fibre corridors
                          (no public route data exists for Canada's carrier backbones)
 - data/datacentres-peeringdb.js  PeeringDB colocation/interconnection facilities in Canada (operator-maintained);
-                         the map merges them with OpenStreetMap's data centres
+                         the map merges them with OpenStreetMap's data centres. Sizes in MW come from the hand-curated
+                         datacentre-mw.csv (name must match the PeeringDB facility name exactly).
 
 Run:  python fetch_telecom.py                 (all four)
       python fetch_telecom.py rail telecom    (only these steps: nbd, telecom, rail, peeringdb)
+      python fetch_telecom.py mw              (re-apply datacentre-mw.csv without re-downloading PeeringDB)
 """
 import csv
 import io
@@ -68,6 +70,27 @@ def pdb_points(facs):
     return out
 
 
+MW_CSV = "datacentre-mw.csv"
+
+
+def apply_mw(pts, rows):
+    """Append [mw, basis, note, source] from the curated CSV rows to matching PeeringDB points (by exact name)."""
+    by_name = {r["name"]: r for r in rows}
+    for p in pts:
+        del p[8:]   # drop any previous MW fields
+        r = by_name.get(p[2])
+        if r:
+            p += [float(r["mw"]), r["basis"], r["note"] or None, r["source"] or None]
+    return pts
+
+
+def read_mw():
+    if not os.path.exists(MW_CSV):
+        return []
+    with open(MW_CSV, encoding="utf-8", newline="") as f:
+        return list(csv.DictReader(f))
+
+
 def simplify(pts, tol):
     """Ramer-Douglas-Peucker on [lon, lat] points; tol in degrees."""
     if len(pts) < 3:
@@ -87,6 +110,7 @@ if __name__ == "__main__":
     assert simplify([[0, 0], [1, 1], [2, 0]], 0.001) == [[0, 0], [1, 1], [2, 0]]
     assert pdb_points([{"status": "ok", "latitude": 43.6, "longitude": -79.4, "name": "A", "address1": "1 St", "city": "T", "state": "ON",
                         "available_voltage_services": ["120 VAC"], "net_count": 3}, {"status": "ok", "latitude": None}]) ==         [[43.6, -79.4, "A", None, "1 St, T, ON", None, 3, "120 VAC"]]
+    assert apply_mw([[1, 2, "A", 0, 0, 0, 0, 0]], [{"name": "A", "mw": "5", "basis": "official", "note": "", "source": "u"}]) ==         [[1, 2, "A", 0, 0, 0, 0, 0, 5.0, "official", None, "u"]]
     steps = sys.argv[1:] or ["nbd", "telecom", "rail", "peeringdb"]
     sample = [{"wo_backbone_fibre_sans_fibre_dorsale": "1", "satellite_dep": "0", "Longitude": "-66.123456", "Latitude": "46.5", "Name_en": "A"},
               {"wo_backbone_fibre_sans_fibre_dorsale": "0", "satellite_dep": "0", "Longitude": "0", "Latitude": "0", "Name_en": "B"}]
@@ -133,5 +157,12 @@ if __name__ == "__main__":
                     raise
                 print(f"  PeeringDB busy (429), waiting {60 * (attempt + 1)} s", flush=True)
                 time.sleep(60 * (attempt + 1))
-        write_js("datacentres-peeringdb.js", "PDB_LOADED", pts)
+        write_js("datacentres-peeringdb.js", "PDB_LOADED", apply_mw(pts, read_mw()))
         print(f"PeeringDB: {len(pts):,} facilities")
+
+    if "mw" in steps:
+        path = os.path.join(OUT_DIR, "datacentres-peeringdb.js")
+        text = open(path, encoding="utf-8").read()
+        pts = apply_mw(json.loads(text[text.index("(") + 1:text.rindex(")")]), rows := read_mw())
+        write_js("datacentres-peeringdb.js", "PDB_LOADED", pts)
+        print(f"MW sizes applied to {sum(len(p) > 8 for p in pts)} of {len(pts)} facilities ({len(rows)} rows in {MW_CSV})")

@@ -1,0 +1,28 @@
+name,mw,basis,note,source
+eStruxture MTL-1,5,official,critical IT load,https://www.estruxture.com/hubfs/site-files/eStruxture_Datasheet_MTL1_EN_July-2022.pdf
+eStruxture MTL-2,30,official,critical IT load,https://www.estruxture.com/hubfs/site-files/eStruxture_Datasheet_MTL2_EN-1-2023.pdf
+eStruxture MTL-3,1.2,official,critical IT load,https://info.estruxture.com/hubfs/site-files/eStruxture_Datasheet_MTL3_EN.pdf
+eStruxture MTL-4,16.5,official,total facility power,https://www.estruxture.com/data-centers/montreal/mtl-4
+eStruxture CAL-1,9,official,total capacity,https://www.estruxture.com/data-centers/calgary/cal-1
+eStruxture CAL-2,20,official,power at opening (30 MW originally announced),https://www.estruxture.com/press-releases/estruxture-officially-opens-its-second-data-center-in-calgary-reinforcing-the-companys-commitment-to-growing-its-business-in-canada
+eStruxture TOR-3,5,official,total power capacity,https://www.estruxture.com/hubfs/site-files/eStruxture_Datasheet_TOR3_EN-V4.pdf
+eStruxture TOR-4,10,official,total capacity,https://www.estruxture.com/hubfs/site-files/eStruxture_Datasheet_TOR4_EN-V4.pdf
+eStruxture TOR-5,10,official,total power capacity,https://www.estruxture.com/hubfs/site-files/eStruxture_Datasheet_TOR5_EN-1-2023.pdf
+eStruxture VAN-1,2.4,official,critical IT load,https://www.estruxture.com/hubfs/site-files/eStruxture_Datasheet_VAN1_EN-V5.pdf
+eStruxture VAN-2,2.14,official,total power capacity,https://www.estruxture.com/wp-content/uploads/2024/04/eStruxture_Datasheet_VAN2_EN-1-2023.pdf
+eStruxture VAN-3,13,official,critical power (earlier datasheets: 10 MW),https://www.estruxture.com/data-centers/vancouver/van-3
+Cologix MTL9,25,official,,https://cologix.com/data-centers/montreal/
+Cologix MTL10,35,official,,https://cologix.com/data-centers/montreal/
+Cologix MTL8,21,reported,AI/hyperscale site (financing coverage),https://convergedigest.com/cologix-secures-cad-240m-for-21-mw-ai-data-center-in-montreal/
+Cologix MTL11,1.2,directory,listing may be dated (former Metro Optic site),https://baxtel.com/data-center/cologix-mtl11
+Cologix TOR1,4,directory,directories disagree: 4 MW (Ocolo) vs 12 MW (Cloudscene),https://www.ocolo.io/colocation/cologix-data-centers/toronto-tor1/
+Equinix TR2 - Toronto,16,reported,design maximum (engineering firm); directories list 12-14 MW,https://smithandandersen.com/work/equinix-ibx-data-centre-tr2
+Vantage Data Centers (QC1),11,reported,,https://www.datacenterfrontier.com/cloud/article/11427531/vantage-data-centers-outlines-major-expansion-in-quebec
+Vantage Data Centers (QC2),86,reported,Quebec City campus at full build-out incl. QC24 (due 2027),https://renx.ca/index.php/cdpq-invests-103m-in-quebec-city-vantage-data-centers-expansion
+Vantage Data Centers (QC4),48,official,campus IT capacity when fully developed (later reports: 50 MW),https://vantage-dc.com/?p=12906
+"Equinix TR7 - Toronto, Brampton (formerly Q9 Brampton 4/5)",24,directory,"Brampton campus (TR6 + TR7) critical capacity; another directory lists 16.6 MVA",https://baxtel.com/data-center/equinix-brampton-tr7
+Equinix MT2,39,directory,planned colocation capacity per DataCenterHawk; not confirmed by Equinix,https://datacenterhawk.com/marketplace/providers/equinix/3500-rue-f-x-tessier/mt2
+Digital Realty YYZ10 Toronto (371 Gough),6.75,directory,critical power per DataCenterHawk; Ocolo lists 10 MW,https://datacenterhawk.com/marketplace/providers/digital-realty/371-gough-road/yyz10
+Rogers Calgary DC3 (Airdrie),7.5,directory,now Qu Data Centres CGY3,https://inflect.com/building/34-highland-park-way-northeast-airdrie/rogers-and-shaw/datacenter/cal-dc3
+Hut 8 GTA1,4,official,designed power capacity,https://static.datacentermap.com/company/hut-8/datacenter6210/Hut-8%20Mississauga%20Data%20Centre%20-%20Overview%20HPC.pdf
+Cologix TOR4,15,reported,planned capacity at 2022 joint-venture announcement,https://baxtel.com/news/data-centers/cologix-tor5

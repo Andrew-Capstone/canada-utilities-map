@@ -44,6 +44,7 @@ python fetch_gas_regulators.py
 - Infrastructure and telecom: © OpenStreetMap contributors, ODbL.
 - Community backbone flags: ISED National Broadband Data, Open Government Licence – Canada.
 - Data centres: PeeringDB facility records (operator-maintained), merged with OpenStreetMap data centres.
+- Data centre sizes (MW): hand-curated in `datacentre-mw.csv` from operator datasheets, press and industry directories; each row records its basis (official / reported / directory) and source link. Edit the CSV, then run `python fetch_telecom.py mw` to apply it.
 - Northwestel / N.W.T. fibre routes: Government of the Northwest Territories ArcGIS service.
 - Alberta gas pipelines: Alberta Energy Regulator Enhanced Pipeline file; informational use, no commercial reproduction.
 - BC pipelines: BC Energy Regulator permitted pipeline segments (DataBC), Open Government Licence – BC.

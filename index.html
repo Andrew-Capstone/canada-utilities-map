@@ -423,7 +423,9 @@ function osmPopup(t) {
     ${row('Type', kind)}${row('Substance', t.substance)}${row('Voltage', v)}${row('Pressure', t.pressure)}${row('Diameter', t.diameter)}
     ${row('Status', t.status)}${row('Medium', t['telecom:medium'])}${row('Usage', t.usage)}${row('Operator', t.operator)}${row('Owner', t.owner)}${row('Circuits', t.circuits)}
     ${row('Source', t['plant:source'])}${row('Output', t['plant:output:electricity'])}${row('Ref', t.ref)}
+    ${row('Size', t.mw && `${t.mw} MW (${t.mw_basis})`)}${row('Size note', t.mw_note)}
     ${row('Address', t.address)}${row('Networks on site', t.nets)}${row('Power available', t.power_services)}${row('Data from', t.dsource)}</dl>
+    ${/^https?:\/\//.test(t.mw_source || '') ? `<a href="${esc(t.mw_source)}" target="_blank" rel="noopener">Size source</a> · ` : ''}
     ${/^https?:\/\//.test(t.website || '') ? `<a href="${esc(t.website)}" target="_blank" rel="noopener">Operator's page</a>` : ''}</div>`;
 }
 
@@ -537,7 +539,7 @@ const TELECOM_CATS = [
   { key: 'nwt', label: 'N.W.T. fibre link (official)', swatch: lineSw(FIBRE_OFFICIAL) },
   { key: 'rail', label: 'Likely fibre corridors: rail mainlines (stand-in)', swatch: lineSw(RAIL) },
   { key: 'supernet', label: 'Alberta SuperNet sites, Edmonton region', swatch: dotSw('#1565c0') },
-  { key: 'data_center', label: 'Data centres (PeeringDB + OSM)', swatch: boxSw('#6a1b9a') },
+  { key: 'data_center', label: 'Data centres (PeeringDB + OSM; bigger = more MW)', swatch: boxSw('#6a1b9a') },
   { key: 'exchange', label: 'Telephone exchanges', swatch: dotSw(FIBRE), off: true },
   { key: 'nofibre', label: 'Communities without fibre backbone (ISED)', swatch: dotSw('#d73027'), off: true },
   { key: 'sat', label: 'Satellite-dependent communities (ISED)', swatch: dotSw('#fc8d59'), off: true },
@@ -553,7 +555,8 @@ function telecomStyle(t) {
   const c = telecomCat(t);
   if (c === 'line') return { color: FIBRE, weight: 2, dashArray: '1 4', lineCap: 'round' };
   if (c === 'rail') return { color: RAIL, weight: 2.5, dashArray: '10 5', opacity: 0.85 };
-  if (c === 'data_center') return { color: '#6a1b9a', weight: 1.5, fillColor: '#6a1b9a', fillOpacity: 0.5 };
+  // data centres with a published size grow with MW (1 MW ≈ 6 px, 30 MW ≈ 13 px, 86 MW ≈ 19 px radius)
+  if (c === 'data_center') return { color: '#6a1b9a', weight: 1.5, fillColor: '#6a1b9a', fillOpacity: t.mw ? 0.65 : 0.5, radius: t.mw ? 4 + 1.6 * Math.sqrt(t.mw) : 5 };
   if (c === 'nofibre') return { color: '#d73027', weight: 2, fillOpacity: 0.5, radius: 4 };
   if (c === 'sat') return { color: '#fc8d59', weight: 2, fillOpacity: 0.5, radius: 4 };
   return { color: FIBRE, weight: 2, fillOpacity: 0.3, radius: 3 };
@@ -587,8 +590,9 @@ window.TELECOM_LOADED = fc => {
   mergeDataCentres();
 };
 window.PDB_LOADED = pts => {
-  pdbDC = pts.map(([lat, lon, name, operator, address, website, nets, power]) => ({ type: 'Feature',
-    properties: { telecom: 'data_center', name, operator, address, website, nets: nets || null, power_services: power, dsource: 'PeeringDB' },
+  pdbDC = pts.map(([lat, lon, name, operator, address, website, nets, power, mw, mwBasis, mwNote, mwSource]) => ({ type: 'Feature',
+    properties: { telecom: 'data_center', name, operator, address, website, nets: nets || null, power_services: power, dsource: 'PeeringDB',
+      mw, mw_basis: mwBasis, mw_note: mwNote, mw_source: mwSource },
     geometry: { type: 'Point', coordinates: [lon, lat] } }));
   mergeDataCentres();
 };
@@ -881,7 +885,7 @@ const kv = v => v && String(v).split(';').map(x => parseFloat(x) / 1000).filter(
 function describeHit(leaf) {
   if (leaf.info) { const i = leaf.info; return [i.op, i.diam && `${i.diam} mm`, GAS_TYPE[i.gas], i.src].filter(Boolean).join(' · '); }
   const p = leaf.feature?.properties || {};
-  return [p.name || p.Pipeline_Name, kv(p.voltage), p.operator || p.Company, p.usage === 'transmission' && 'transmission'].filter(Boolean).join(' · ') || 'Unnamed';
+  return [p.name || p.Pipeline_Name, p.mw && `${p.mw} MW`, kv(p.voltage), p.operator || p.Company, p.usage === 'transmission' && 'transmission'].filter(Boolean).join(' · ') || 'Unnamed';
 }
 const distText = d => fmt(d, lenU());
 const pick = (layers, keys) => keys.map(k => layers[k]);
