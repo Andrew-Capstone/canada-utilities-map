@@ -81,6 +81,10 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .measuring .leaflet-overlay-pane, .measuring .leaflet-interactive { pointer-events: none !important; }
 .measuring { cursor: crosshair; }
 .m-label { font: 600 12px/1.2 var(--font-data); background: var(--panel); color: var(--fg); border: 1px solid var(--accent); }
+.m-handle { background: #fff; border: 2px solid #0b6e99; border-radius: 50%; box-sizing: border-box; cursor: grab; }
+.m-mid { opacity: .55; }
+.m-mid:hover { opacity: 1; }
+.m-shape { cursor: move; }
 
 .leaflet-popup-content { font: 13px/1.4 var(--font-body); margin: 10px 12px; }
 .pop h3 { font: 600 15px/1.2 var(--font-display); margin: 0 0 6px; }
@@ -680,19 +684,21 @@ const describe = (kind, pts) => kind === 'area'
   : fmt(pathLength(pts), lenU());
 
 function label(m) {
-  if (m.layer.getTooltip()) return m.layer.setTooltipContent(describe(m.kind, m.pts));
   const at = m.kind === 'area' ? m.layer.getCenter() : m.pts[m.pts.length - 1];
-  m.layer.bindTooltip(describe(m.kind, m.pts), { permanent: true, direction: 'top', className: 'm-label' }).openTooltip(at);
+  if (!m.layer.getTooltip()) m.layer.bindTooltip('', { permanent: true, direction: 'top', className: 'm-label' });
+  m.layer.setTooltipContent(describe(m.kind, m.pts)).openTooltip(at);
 }
 function refreshOut() {
   const live = draft && draft.pts.length > 1 ? `${draft.kind === 'area' ? 'Drawing area' : 'Drawing line'}: ${describe(draft.kind, draft.pts)}` : '';
-  $('measureOut').textContent = live || (draft ? 'Click the map to add points.' : measures.length ? measures.map(m => describe(m.kind, m.pts)).join('\n') : '');
+  $('measureOut').textContent = live || (draft ? (draft.kind === 'area' ? 'Click to add corners; click the first corner or double-click to close.' : 'Click to add points; double-click to finish.') : measures.length ? measures.map(m => describe(m.kind, m.pts)).join('\n') : '');
+  if (measures.length && !draft) $('measureOut').textContent += '\nDrag corners to reshape, click a side’s midpoint to add a corner, drag inside an area to move it.';
   $('measureOut').style.whiteSpace = 'pre-line';
 }
 
 function startMeasure(kind) {
   if (draft) finishMeasure();
-  const style = { color: '#0b6e99', weight: 3, dashArray: kind === 'area' ? null : '6 4', fillOpacity: 0.15, pane: 'measure', renderer: measureSvg, interactive: false };
+  const style = { color: '#0b6e99', weight: 3, dashArray: kind === 'area' ? null : '6 4', fillOpacity: 0.15, pane: 'measure', renderer: measureSvg,
+    interactive: kind === 'area', bubblingMouseEvents: false, className: kind === 'area' ? 'm-shape' : '' };
   draft = { kind, pts: [], layer: (kind === 'area' ? L.polygon([], style) : L.polyline([], style)).addTo(map),
             guide: L.polyline([], { color: '#0b6e99', weight: 1.5, dashArray: '3 4', pane: 'measure', renderer: measureSvg, interactive: false }).addTo(map) };
   map.doubleClickZoom.disable();
@@ -715,12 +721,17 @@ function finishMeasure() {
   if (!draft) return;
   const m = draft, enough = m.pts.length >= (m.kind === 'area' ? 3 : 2);
   stopDrawing();
-  if (enough) { measures.push(m); label(m); } else m.layer.remove();
+  if (enough) { measures.push(m); label(m); makeEditable(m); } else m.layer.remove();
   refreshOut();
 }
 function cancelMeasure() { if (draft) { draft.layer.remove(); stopDrawing(); refreshOut(); } }
 
-map.on('click', e => { if (!draft) return; draft.pts.push(e.latlng); draft.layer.setLatLngs(draft.pts); refreshOut(); });
+map.on('click', e => {
+  if (!draft) return;
+  const first = draft.pts[0];
+  if (draft.kind === 'area' && draft.pts.length >= 3 && map.latLngToContainerPoint(first).distanceTo(e.containerPoint) < 10) return finishMeasure();
+  draft.pts.push(e.latlng); draft.layer.setLatLngs(draft.pts); refreshOut();
+});
 map.on('dblclick', e => { if (draft) { draft.pts.pop(); finishMeasure(); } });   // the dblclick's second click already added a duplicate point
 map.on('mousemove', e => {
   if (!draft || !draft.pts.length) return;
@@ -731,7 +742,53 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') cancelMeasur
 $('measureLine').onclick = () => draft?.kind === 'line' ? finishMeasure() : startMeasure('line');
 $('measureArea').onclick = () => draft?.kind === 'area' ? finishMeasure() : startMeasure('area');
 $('measureFinish').onclick = finishMeasure;
-$('measureClear').onclick = () => { cancelMeasure(); measures.splice(0).forEach(m => m.layer.remove()); refreshOut(); };
+$('measureClear').onclick = () => { cancelMeasure(); measures.splice(0).forEach(m => { m.layer.remove(); m.handles?.remove(); }); refreshOut(); };
+
+// --- Editing finished measurements (like Google Earth): drag corners, click or drag a side's midpoint to add
+// a corner, and drag inside an area to move the whole shape. Handles sit in their own pane above the shapes.
+map.createPane('measureHandles').style.zIndex = 650;
+const cornerIcon = L.divIcon({ className: 'm-handle', iconSize: [12, 12] });
+const midIcon = L.divIcon({ className: 'm-handle m-mid', iconSize: [10, 10] });
+const midpoint = (a, b) => L.latLng((a.lat + b.lat) / 2, (a.lng + b.lng) / 2);
+const sides = m => m.kind === 'area' ? m.pts.length : m.pts.length - 1;
+console.assert(sides({ kind: 'area', pts: [1, 2, 3] }) === 3 && sides({ kind: 'line', pts: [1, 2, 3] }) === 2, 'sides');
+function redrawMeasure(m) { m.layer.setLatLngs(m.pts); label(m); refreshOut(); }
+function buildHandles(m) {
+  m.handles.clearLayers();
+  const handle = (ll, icon, title) => L.marker(ll, { icon, title, draggable: true, keyboard: false, pane: 'measureHandles' }).addTo(m.handles);
+  m.pts.forEach((p, i) => handle(p, cornerIcon, 'Drag to move this corner')
+    .on('drag', e => { m.pts[i] = e.target.getLatLng(); redrawMeasure(m); })
+    .on('dragend', () => buildHandles(m)));
+  for (let i = 0; i < sides(m); i++) {
+    let added = false;
+    const add = ll => { if (!added) { m.pts.splice(i + 1, 0, ll); added = true; } };
+    handle(midpoint(m.pts[i], m.pts[(i + 1) % m.pts.length]), midIcon, 'Click or drag to add a corner')
+      .on('dragstart', e => add(e.target.getLatLng()))
+      .on('drag', e => { m.pts[i + 1] = e.target.getLatLng(); redrawMeasure(m); })
+      .on('dragend', () => buildHandles(m))
+      .on('click', e => { add(e.target.getLatLng()); redrawMeasure(m); buildHandles(m); });
+  }
+}
+function makeEditable(m) {
+  m.handles = L.layerGroup().addTo(map);
+  buildHandles(m);
+  if (m.kind !== 'area') return;
+  // shortcut: whole-shape move is mouse-only (corners also drag by touch); add pointer events if needed on tablets
+  L.DomEvent.on(m.layer.getElement(), 'mousedown', ev => {
+    if (draft || siteMode || ev.button !== 0) return;
+    L.DomEvent.stop(ev);   // keep the map itself from panning
+    const start = map.mouseEventToLatLng(ev), orig = m.pts.map(p => L.latLng(p.lat, p.lng));
+    m.handles.remove();
+    const move = e => {
+      const at = map.mouseEventToLatLng(e), dLat = at.lat - start.lat, dLng = at.lng - start.lng;
+      m.pts = orig.map(p => L.latLng(p.lat + dLat, p.lng + dLng));
+      redrawMeasure(m);
+    };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); m.handles.addTo(map); buildHandles(m); };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+}
 $('lenUnit').onchange = $('areaUnit').onchange = () => { measures.forEach(label); refreshOut(); };
 
 // --- Contour lines, drawn per tile from AWS Terrain Tiles (Terrarium PNG elevation, CORS-open, no key)
