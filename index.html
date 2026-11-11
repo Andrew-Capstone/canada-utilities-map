@@ -85,6 +85,7 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .m-mid { opacity: .55; }
 .m-mid:hover { opacity: 1; }
 .m-shape { cursor: move; }
+.m-rotate { background: #0b6e99; border-color: #fff; }
 
 .leaflet-popup-content { font: 13px/1.4 var(--font-body); margin: 10px 12px; }
 .pop h3 { font: 600 15px/1.2 var(--font-display); margin: 0 0 6px; }
@@ -124,7 +125,8 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
     <div class="sec-body">
     <div class="btns">
       <button class="btn" type="button" id="measureLine" aria-pressed="false">Distance</button>
-      <button class="btn" type="button" id="measureArea" aria-pressed="false">Area</button>
+      <button class="btn" type="button" id="measureArea" aria-pressed="false">Polygon</button>
+      <button class="btn" type="button" id="measureRect" aria-pressed="false">Rectangle</button>
       <button class="btn" type="button" id="measureFinish" hidden>Finish</button>
       <button class="btn" type="button" id="measureClear">Clear</button>
     </div>
@@ -678,25 +680,31 @@ map.createPane('measure').style.zIndex = 640;   // above every data layer, below
 const measureSvg = L.svg({ pane: 'measure' });   // non-interactive SVG paths never catch clicks
 const measures = [];   // finished: { kind, pts, layer }
 let draft = null;      // in progress: { kind, pts, layer, guide }
+let rectMode = false;  // next drag on the map draws a rectangle
 const lenU = () => LEN[$('lenUnit').value], areaU = () => AREA[$('areaUnit').value];
-const describe = (kind, pts) => kind === 'area'
+const describe = (kind, pts, rect) => kind === 'rect'
+  ? `${fmt(rect.w * rect.h, areaU())} · ${fmt(Math.max(rect.w, rect.h), lenU())} × ${fmt(Math.min(rect.w, rect.h), lenU())}`
+  : kind === 'area'
   ? `${fmt(geodesicArea(pts), areaU())} · perimeter ${fmt(pathLength([...pts, pts[0]]), lenU())}`
   : fmt(pathLength(pts), lenU());
 
 function label(m) {
-  const at = m.kind === 'area' ? m.layer.getCenter() : m.pts[m.pts.length - 1];
+  const at = m.kind === 'line' ? m.pts[m.pts.length - 1] : m.layer.getCenter();
   if (!m.layer.getTooltip()) m.layer.bindTooltip('', { permanent: true, direction: 'top', className: 'm-label' });
-  m.layer.setTooltipContent(describe(m.kind, m.pts)).openTooltip(at);
+  m.layer.setTooltipContent(describe(m.kind, m.pts, m.rect)).openTooltip(at);
 }
 function refreshOut() {
   const live = draft && draft.pts.length > 1 ? `${draft.kind === 'area' ? 'Drawing area' : 'Drawing line'}: ${describe(draft.kind, draft.pts)}` : '';
-  $('measureOut').textContent = live || (draft ? (draft.kind === 'area' ? 'Click to add corners; click the first corner or double-click to close.' : 'Click to add points; double-click to finish.') : measures.length ? measures.map(m => describe(m.kind, m.pts)).join('\n') : '');
-  if (measures.length && !draft) $('measureOut').textContent += '\nDrag corners to reshape, click a side’s midpoint to add a corner, drag inside an area to move it.';
+  $('measureOut').textContent = live || (draft ? (draft.kind === 'area' ? 'Click to add corners; click the first corner or double-click to close.' : 'Click to add points; double-click to finish.') : rectMode ? 'Click and drag on the map to draw a rectangle.' : measures.length ? measures.map(m => describe(m.kind, m.pts, m.rect)).join('\n') : '');
+  if (measures.length && !draft && !rectMode) $('measureOut').textContent += measures.some(m => m.kind === 'rect')
+    ? '\nDrag corners to reshape or resize, the round handle to rotate a rectangle, and inside a shape to move it.'
+    : '\nDrag corners to reshape, click a side’s midpoint to add a corner, drag inside an area to move it.';
   $('measureOut').style.whiteSpace = 'pre-line';
 }
 
 function startMeasure(kind) {
   if (draft) finishMeasure();
+  setRectMode(false);
   const style = { color: '#0b6e99', weight: 3, dashArray: kind === 'area' ? null : '6 4', fillOpacity: 0.15, pane: 'measure', renderer: measureSvg,
     interactive: kind === 'area', bubblingMouseEvents: false, className: kind === 'area' ? 'm-shape' : '' };
   draft = { kind, pts: [], layer: (kind === 'area' ? L.polygon([], style) : L.polyline([], style)).addTo(map),
@@ -738,7 +746,7 @@ map.on('mousemove', e => {
   const last = draft.pts[draft.pts.length - 1];
   draft.guide.setLatLngs(draft.kind === 'area' && draft.pts.length > 1 ? [last, e.latlng, draft.pts[0]] : [last, e.latlng]);
 });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') cancelMeasure(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { cancelMeasure(); setRectMode(false); } });
 $('measureLine').onclick = () => draft?.kind === 'line' ? finishMeasure() : startMeasure('line');
 $('measureArea').onclick = () => draft?.kind === 'area' ? finishMeasure() : startMeasure('area');
 $('measureFinish').onclick = finishMeasure;
@@ -769,26 +777,112 @@ function buildHandles(m) {
       .on('click', e => { add(e.target.getLatLng()); redrawMeasure(m); buildHandles(m); });
   }
 }
-function makeEditable(m) {
-  m.handles = L.layerGroup().addTo(map);
-  buildHandles(m);
-  if (m.kind !== 'area') return;
-  // shortcut: whole-shape move is mouse-only (corners also drag by touch); add pointer events if needed on tablets
+// Drag a shape from inside to move it. begin() snapshots the shape and returns apply(dLat, dLng).
+// shortcut: whole-shape move is mouse-only (corners also drag by touch); add pointer events if needed on tablets
+function makeDraggable(m, begin, rebuild) {
   L.DomEvent.on(m.layer.getElement(), 'mousedown', ev => {
-    if (draft || siteMode || ev.button !== 0) return;
+    if (draft || siteMode || rectMode || ev.button !== 0) return;
     L.DomEvent.stop(ev);   // keep the map itself from panning
-    const start = map.mouseEventToLatLng(ev), orig = m.pts.map(p => L.latLng(p.lat, p.lng));
+    const start = map.mouseEventToLatLng(ev), apply = begin();
     m.handles.remove();
-    const move = e => {
-      const at = map.mouseEventToLatLng(e), dLat = at.lat - start.lat, dLng = at.lng - start.lng;
-      m.pts = orig.map(p => L.latLng(p.lat + dLat, p.lng + dLng));
-      redrawMeasure(m);
-    };
-    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); m.handles.addTo(map); buildHandles(m); };
+    const move = e => { const at = map.mouseEventToLatLng(e); apply(at.lat - start.lat, at.lng - start.lng); };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); m.handles.addTo(map); rebuild(); };
     document.addEventListener('mousemove', move);
     document.addEventListener('mouseup', up);
   });
 }
+function makeEditable(m) {
+  m.handles = L.layerGroup().addTo(map);
+  buildHandles(m);
+  if (m.kind !== 'area') return;
+  makeDraggable(m, () => {
+    const orig = m.pts.map(p => L.latLng(p.lat, p.lng));
+    return (dLat, dLng) => { m.pts = orig.map(p => L.latLng(p.lat + dLat, p.lng + dLng)); redrawMeasure(m); };
+  }, () => buildHandles(m));
+}
+
+// --- Rectangle measurement: click-drag to draw; drag a corner to resize (opposite corner stays put), the round
+// handle to rotate, inside to move. Stored as centre c, width w and height h in metres, and angle a (radians,
+// anticlockwise), so it stays a true rectangle through every edit.
+// shortcut: local flat-earth metres around the centre (toXY/fromXY); accurate at site scale, not for 100 km+ boxes
+const rot = ([x, y], a) => [x * Math.cos(a) - y * Math.sin(a), x * Math.sin(a) + y * Math.cos(a)];
+const fromXY = (o, [x, y]) => L.latLng(o.lat + y / M_LAT, o.lng + x / (M_LON * Math.cos(o.lat * Math.PI / 180)));
+const RECT_SIGNS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];   // corner order around the rectangle
+const rectCorners = r => RECT_SIGNS.map(([sx, sy]) => fromXY(r.c, rot([sx * r.w / 2, sy * r.h / 2], r.a)));
+const rectPoint = (r, x, y) => fromXY(r.c, rot([x, y], r.a));   // point in the rectangle's own frame
+const rotateHandleAt = r => rectPoint(r, 0, r.h / 2 + Math.max(r.w, r.h) * 0.2);
+// rectangle with fixed corner o and dragged corner p (metres, same origin), keeping angle a
+function rectFromDiagonal(o, p, a) {
+  const d = rot([p[0] - o[0], p[1] - o[1]], -a);
+  return { w: Math.abs(d[0]), h: Math.abs(d[1]), mid: [(o[0] + p[0]) / 2, (o[1] + p[1]) / 2] };
+}
+const angleTo = ([x, y]) => Math.atan2(-x, y);   // angle that points the rectangle's "up" along (x, y)
+{ // self-checks
+  const r = rectFromDiagonal([-50, -25], [100, 50], 0);
+  console.assert(r.w === 150 && r.h === 75 && r.mid[0] === 25 && r.mid[1] === 12.5, 'rectFromDiagonal');
+  const q = rectFromDiagonal([0, 0], [-10, 20], Math.PI / 2);
+  console.assert(Math.abs(q.w - 20) < 1e-9 && Math.abs(q.h - 10) < 1e-9, 'rectFromDiagonal rotated');
+  console.assert(angleTo([0, 1]) === 0 && Math.abs(angleTo([-1, 0]) - Math.PI / 2) < 1e-12, 'angleTo');
+}
+const rotateIcon = L.divIcon({ className: 'm-handle m-rotate', iconSize: [14, 14] });
+function redrawRect(m) { m.pts = rectCorners(m.rect); redrawMeasure(m); }
+function buildRectHandles(m) {
+  m.handles.clearLayers();
+  const r = m.rect, handle = (ll, icon, title) => L.marker(ll, { icon, title, draggable: true, keyboard: false, pane: 'measureHandles' }).addTo(m.handles);
+  rectCorners(r).forEach((p, i) => {
+    let fixed;
+    handle(p, cornerIcon, 'Drag to resize')
+      .on('dragstart', () => { fixed = rectCorners(m.rect)[(i + 2) % 4]; })
+      .on('drag', e => {
+        const res = rectFromDiagonal([0, 0], toXY(e.target.getLatLng(), fixed), m.rect.a);
+        m.rect = { ...m.rect, w: res.w, h: res.h, c: fromXY(fixed, res.mid) };
+        redrawRect(m);
+      })
+      .on('dragend', () => buildRectHandles(m));
+  });
+  const stem = L.polyline([rectPoint(r, 0, r.h / 2), rotateHandleAt(r)], { color: '#0b6e99', weight: 1.5, pane: 'measure', renderer: measureSvg, interactive: false }).addTo(m.handles);
+  handle(rotateHandleAt(r), rotateIcon, 'Drag to rotate')
+    .on('drag', e => {
+      m.rect = { ...m.rect, a: angleTo(toXY(e.target.getLatLng(), m.rect.c)) };
+      redrawRect(m);
+      stem.setLatLngs([rectPoint(m.rect, 0, m.rect.h / 2), e.target.getLatLng()]);
+    })
+    .on('dragend', () => buildRectHandles(m));
+}
+function setRectMode(on) {
+  rectMode = on;
+  $('measureRect').setAttribute('aria-pressed', String(on));
+  on ? map.dragging.disable() : map.dragging.enable();
+  map.getContainer().classList.toggle('measuring', on || !!draft);   // clicks go to the map, not feature popups
+  refreshOut();
+}
+$('measureRect').onclick = () => { if (draft) finishMeasure(); if (siteMode) setSiteMode(false); setRectMode(!rectMode); };
+L.DomEvent.on(map.getContainer(), 'mousedown', ev => {
+  if (!rectMode || ev.button !== 0 || ev.target.closest('.leaflet-control')) return;
+  L.DomEvent.stop(ev);
+  const a = map.mouseEventToLatLng(ev);
+  const m = { kind: 'rect', rect: { c: a, w: 0, h: 0, a: 0 }, pts: [] };
+  m.layer = L.polygon([], { color: '#0b6e99', weight: 3, fillOpacity: 0.15, pane: 'measure', renderer: measureSvg,
+    interactive: true, bubblingMouseEvents: false, className: 'm-shape' }).addTo(map);
+  const move = e => {
+    const b = map.mouseEventToLatLng(e), [dx, dy] = toXY(b, a);
+    m.rect = { c: midpoint(a, b), w: Math.abs(dx), h: Math.abs(dy), a: 0 };
+    redrawRect(m);
+  };
+  const up = () => {
+    document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
+    setRectMode(false);
+    if (m.rect.w < 1 || m.rect.h < 1) { m.layer.remove(); refreshOut(); return; }   // a click, not a drag
+    measures.push(m);
+    m.handles = L.layerGroup().addTo(map);
+    buildRectHandles(m);
+    makeDraggable(m, () => { const c0 = m.rect.c; return (dLat, dLng) => { m.rect = { ...m.rect, c: L.latLng(c0.lat + dLat, c0.lng + dLng) }; redrawRect(m); }; },
+      () => buildRectHandles(m));
+    refreshOut();
+  };
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+});
 $('lenUnit').onchange = $('areaUnit').onchange = () => { measures.forEach(label); refreshOut(); };
 
 // --- Contour lines, drawn per tile from AWS Terrain Tiles (Terrarium PNG elevation, CORS-open, no key)
@@ -1000,7 +1094,7 @@ function setSiteMode(on) {
   $('siteBtn').textContent = on ? 'Click the map…' : 'Check a site';
   map.getContainer().classList.toggle('measuring', on || !!draft);   // reuse the measuring click-through
 }
-$('siteBtn').onclick = () => { if (draft) cancelMeasure(); setSiteMode(!siteMode); };
+$('siteBtn').onclick = () => { if (draft) cancelMeasure(); setRectMode(false); setSiteMode(!siteMode); };
 map.on('click', e => { if (siteMode && !draft) { setSiteMode(false); siteReport(e.latlng); } });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && siteMode) setSiteMode(false); });
 
